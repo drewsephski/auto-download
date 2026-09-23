@@ -16,8 +16,8 @@ test("popup renders the dry-run utility", async () => {
   expect(manifest.content_scripts).toBeUndefined();
 
   const context = await chromium.launchPersistentContext("", {
-    channel: "chrome",
-    headless: true,
+    headless: false,
+    ignoreDefaultArgs: ["--disable-extensions"],
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -25,10 +25,7 @@ test("popup renders the dry-run utility", async () => {
   });
 
   try {
-    let [serviceWorker] = context.serviceWorkers();
-    if (!serviceWorker) {
-      serviceWorker = await context.waitForEvent("serviceworker", { timeout: 15_000 });
-    }
+    const serviceWorker = await waitForExtensionWorker(context);
     const extensionId = new URL(serviceWorker.url()).host;
     const page = await context.newPage();
     await page.goto(`chrome-extension://${extensionId}/popup.html`);
@@ -41,3 +38,23 @@ test("popup renders the dry-run utility", async () => {
     await context.close();
   }
 });
+
+async function waitForExtensionWorker(context: Awaited<ReturnType<typeof chromium.launchPersistentContext>>) {
+  const matches = () => context.serviceWorkers().find((worker) => worker.url().endsWith("/background.js"));
+  const existing = matches();
+  if (existing) {
+    return existing;
+  }
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    const worker = await context.waitForEvent("serviceworker", { timeout: deadline - Date.now() }).catch(() => null);
+    if (worker?.url().endsWith("/background.js")) {
+      return worker;
+    }
+    const found = matches();
+    if (found) {
+      return found;
+    }
+  }
+  throw new Error("Download Automations background service worker did not start");
+}

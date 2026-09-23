@@ -65,7 +65,9 @@ async fn send_response(response: &crate::protocol::HostResponse) -> Result<(), H
     match send_message(response).await {
         Ok(()) => Ok(()),
         Err(NmError::Disconnected) => {
-            eprintln!("download-automations-host: browser disconnected before the response was read");
+            eprintln!(
+                "download-automations-host: browser disconnected before the response was read"
+            );
             Ok(())
         }
         Err(error) => Err(HostIoError::Write(error)),

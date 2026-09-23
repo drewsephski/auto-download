@@ -53,17 +53,15 @@ pub fn handle_request(raw: &str) -> HostResponse {
 
     let value: Value = match serde_json::from_str(raw) {
         Ok(value) => value,
-        Err(_) => {
-            return failure(
-                "",
-                "malformed_request",
-                "The request was not valid JSON.",
-            )
-        }
+        Err(_) => return failure("", "malformed_request", "The request was not valid JSON."),
     };
 
     let Some(object) = value.as_object() else {
-        return failure("", "malformed_request", "The request must be a JSON object.");
+        return failure(
+            "",
+            "malformed_request",
+            "The request must be a JSON object.",
+        );
     };
 
     let request_id = match request_id_from(object) {
@@ -161,11 +159,7 @@ fn handle_execute(request_id: &str, object: &Map<String, Value>) -> HostResponse
         );
     };
     let Some(action) = PowerAction::parse(action_name) else {
-        return failure(
-            request_id,
-            "unknown_action",
-            "The action is not supported.",
-        );
+        return failure(request_id, "unknown_action", "The action is not supported.");
     };
 
     match object.get("dryRun") {
@@ -304,7 +298,9 @@ fn parse_download_id(value: Option<&Value>) -> Option<i64> {
 }
 
 fn valid_filename(value: Option<&Value>) -> bool {
-    let filename = value?.as_str()?;
+    let Some(Value::String(filename)) = value else {
+        return false;
+    };
     let length = filename.chars().count();
     if !(1..=MAX_FILENAME_LEN).contains(&length) {
         return false;
@@ -313,10 +309,7 @@ fn valid_filename(value: Option<&Value>) -> bool {
         return false;
     }
     filename.chars().all(|character| {
-        character != '/'
-            && character != '\\'
-            && character != '\0'
-            && !character.is_control()
+        character != '/' && character != '\\' && character != '\0' && !character.is_control()
     })
 }
 
@@ -402,10 +395,7 @@ mod tests {
             "requestId": "req-1",
             "type": "ping"
         })));
-        assert_eq!(
-            response.error.unwrap().code,
-            "unsupported_protocol_version"
-        );
+        assert_eq!(response.error.unwrap().code, "unsupported_protocol_version");
     }
 
     #[test]

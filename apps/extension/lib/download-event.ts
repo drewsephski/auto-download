@@ -45,7 +45,9 @@ export function toCompletedEvent(item: DownloadItemSnapshot, now: number): Downl
 export function sanitizeFilename(filename: string): string {
   const normalized = filename.replaceAll("\\", "/");
   const base = normalized.split("/").pop()?.trim() ?? "";
-  const withoutControls = base.replace(/[\u0000-\u001f]/g, "");
+  const withoutControls = Array.from(base)
+    .filter((character) => character.charCodeAt(0) >= 32)
+    .join("");
   if (!withoutControls || withoutControls === "." || withoutControls === "..") {
     return "download";
   }

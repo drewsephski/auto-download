@@ -5,6 +5,7 @@ dist/
 target/
 playwright-report/
 test-results/
+.tmp-chrome-profile/
 .DS_Store
 *.log
 .env

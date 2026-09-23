@@ -22,7 +22,7 @@ fn decode_single_frame(bytes: &[u8]) -> Value {
 }
 
 fn exchange(payload: Value) -> (Value, String) {
-    let bin = env!("CARGO_BIN_EXE_native_host");
+    let bin = env!("CARGO_BIN_EXE_native-host");
     let mut child = Command::new(bin)
         .arg("chrome-extension://abcdefghijklmnopabcdefghijklmnop/")
         .stdin(Stdio::piped())
@@ -32,7 +32,9 @@ fn exchange(payload: Value) -> (Value, String) {
         .unwrap();
     {
         let stdin = child.stdin.as_mut().unwrap();
-        stdin.write_all(&frame(&serde_json::to_vec(&payload).unwrap())).unwrap();
+        stdin
+            .write_all(&frame(&serde_json::to_vec(&payload).unwrap()))
+            .unwrap();
     }
     let output = child.wait_with_output().unwrap();
     assert!(output.status.success(), "host exited with an error");

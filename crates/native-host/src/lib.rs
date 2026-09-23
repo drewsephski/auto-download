@@ -33,9 +33,9 @@ pub enum InvocationMode {
 /// stays in native-host mode and the arguments are ignored.
 pub fn invocation_mode(args: &[String]) -> InvocationMode {
     match args.first().map(String::as_str) {
-        Some("install" | "verify" | "uninstall" | "help" | "--help" | "-h" | "-V" | "--version") => {
-            InvocationMode::Cli
-        }
+        Some(
+            "install" | "verify" | "uninstall" | "help" | "--help" | "-h" | "-V" | "--version",
+        ) => InvocationMode::Cli,
         _ => InvocationMode::NativeHost,
     }
 }

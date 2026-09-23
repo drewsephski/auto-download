@@ -48,12 +48,24 @@ mod tests {
             ("install.rs", include_str!("install.rs")),
             ("safety.rs", include_str!("safety.rs")),
         ];
-        let stdout_macro = stdout_macro();
         for (name, source) in sources {
             assert!(
-                !source.contains(&stdout_macro),
-                "{name} writes to stdout"
+                !contains_stdout_macro(source),
+                "{name} writes human-readable logs to stdout"
             );
         }
+    }
+
+    fn contains_stdout_macro(source: &str) -> bool {
+        let needle = stdout_macro();
+        let mut rest = source;
+        while let Some(index) = rest.find(&needle) {
+            let preceded_by_e = index > 0 && rest.as_bytes()[index - 1] == b'e';
+            if !preceded_by_e {
+                return true;
+            }
+            rest = &rest[index + needle.len()..];
+        }
+        false
     }
 }

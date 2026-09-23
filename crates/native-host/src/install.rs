@@ -70,7 +70,9 @@ pub struct InstallReport {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VerifyReport {
-    NotInstalled { manifest_path: PathBuf },
+    NotInstalled {
+        manifest_path: PathBuf,
+    },
     ExecutableMissing {
         manifest_path: PathBuf,
         binary_path: PathBuf,
@@ -98,7 +100,11 @@ pub fn extension_origin(extension_id: &str) -> Result<String, InstallError> {
 }
 
 pub fn validate_extension_id(extension_id: &str) -> Result<(), InstallError> {
-    if extension_id.len() == 32 && extension_id.bytes().all(|byte| (b'a'..=b'p').contains(&byte)) {
+    if extension_id.len() == 32
+        && extension_id
+            .bytes()
+            .all(|byte| (b'a'..=b'p').contains(&byte))
+    {
         Ok(())
     } else {
         Err(InstallError::InvalidExtensionId)
@@ -110,9 +116,8 @@ pub fn resolve_binary(explicit: Option<&Path>) -> Result<PathBuf, InstallError> 
         Some(path) => path.to_path_buf(),
         None => std::env::current_exe()?,
     };
-    let absolute = fs::canonicalize(&path).map_err(|_| InstallError::BinaryMissing {
-        path: path.clone(),
-    })?;
+    let absolute =
+        fs::canonicalize(&path).map_err(|_| InstallError::BinaryMissing { path: path.clone() })?;
     if !absolute.is_file() {
         return Err(InstallError::BinaryMissing { path: absolute });
     }
@@ -130,7 +135,7 @@ pub fn install_host(
         HOST_NAME,
         HOST_DESCRIPTION,
         binary_path,
-        &[origin.clone()],
+        std::slice::from_ref(&origin),
         &[],
         &[key],
         Scope::User,
@@ -240,7 +245,8 @@ mod tests {
 
     #[test]
     fn rejects_ids_outside_the_chrome_alphabet() {
-        assert!(validate_extension_id("abcdefabcdefabcdefabcdefabcdefab").is_err());
+        assert!(validate_extension_id("abcdefabcdefabcdefabcdefabcdefaq").is_err());
+        assert!(validate_extension_id("0123456789abcdef0123456789abcdef").is_err());
         assert!(validate_extension_id("short").is_err());
         assert!(validate_extension_id("ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP").is_err());
     }

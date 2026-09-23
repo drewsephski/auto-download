@@ -70,7 +70,7 @@ function createHarness(options: { settings: Settings; state?: string; sendError?
   const downloads: DownloadCompletedEvent[] = [];
   const executions: ExecutionRecord[] = [];
   let handled: number[] = [];
-  let settings = options.settings;
+  const settings = options.settings;
   const tails = new Map<string, Promise<void>>();
 
   const deps: AutomationDeps = {

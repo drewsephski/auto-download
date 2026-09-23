@@ -14,7 +14,7 @@ export const filenameSchema = z
       value !== ".." &&
       !value.includes("/") &&
       !value.includes("\\") &&
-      !/[\u0000-\u001f]/.test(value),
+      !value.split("").some((character) => character.charCodeAt(0) < 32),
     "Invalid filename",
   );
 

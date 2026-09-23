@@ -84,12 +84,16 @@ function createDeps(): AutomationDeps {
     newRequestId() {
       return crypto.randomUUID();
     },
-    lock(name, task) {
+    async lock<T>(name: string, task: () => Promise<T>): Promise<T> {
       const locks = globalThis.navigator?.locks;
       if (!locks) {
         return task();
       }
-      return locks.request(name, task);
+      let value!: T;
+      await locks.request(name, async () => {
+        value = await task();
+      });
+      return value;
     },
   };
 }

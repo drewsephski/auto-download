@@ -59,7 +59,11 @@ mod tests {
 
     #[test]
     fn every_action_is_simulated() {
-        for action in [PowerAction::Sleep, PowerAction::Shutdown, PowerAction::Reboot] {
+        for action in [
+            PowerAction::Sleep,
+            PowerAction::Shutdown,
+            PowerAction::Reboot,
+        ] {
             let result = simulate(action);
             assert!(!result.executed);
             assert!(result.dry_run);
