@@ -1,7 +1,13 @@
 import { browser } from "wxt/browser";
 import { defineBackground } from "wxt/utils/define-background";
 import { NOTIFICATION_TITLE, notificationMessage } from "../lib/action-copy";
-import { processCompletedDownload, type AutomationDeps } from "../lib/automation";
+import {
+  clearDeferredOnBrowserStartup,
+  handleDownloadStartedDuringCountdown,
+  handleQueueTerminalChange,
+  processCompletedDownload,
+  type AutomationDeps,
+} from "../lib/automation";
 import { CANCEL_PENDING_MESSAGE } from "../lib/constants";
 import { downloadChangeOutcome, type DownloadItemSnapshot } from "../lib/download-event";
 import { describeCancelledPending, describeInterruptedPending, describeLifecycle } from "../lib/lifecycle";
@@ -22,9 +28,11 @@ import { normalizeSettings, type PowerAction } from "../lib/settings";
 import {
   downloadHistoryItem,
   executionHistoryItem,
+  getDeferredTriggerValue,
   handledDownloadsItem,
   pendingActionItem,
   permissionItem,
+  setDeferredTriggerValue,
   settingsItem,
 } from "../lib/storage-items";
 
@@ -44,6 +52,14 @@ const session = new LiveHostSession({
 });
 
 export default defineBackground(() => {
+  browser.runtime.onStartup.addListener(() => {
+    void clearDeferredOnBrowserStartup(createDeps());
+  });
+
+  browser.runtime.onInstalled.addListener(() => {
+    void clearDeferredOnBrowserStartup(createDeps());
+  });
+
   const notifications = browser.notifications;
   if (notifications?.onButtonClicked) {
     notifications.onButtonClicked.addListener((notificationId, buttonIndex) => {
@@ -79,21 +95,37 @@ export default defineBackground(() => {
   }
 
   downloads.onCreated.addListener((item) => {
-    if (downloadChangeOutcome(item.state) !== "complete") {
+    if (downloadChangeOutcome(item.state) === "complete") {
+      void settle(item.id);
       return;
     }
-    void settle(item.id);
+    void rerouteIdlePendingOnNewDownload();
   });
 
   downloads.onChanged.addListener((delta) => {
-    if (downloadChangeOutcome(delta.state?.current) !== "complete") {
+    const outcome = downloadChangeOutcome(delta.state?.current);
+    if (outcome === "complete") {
+      void settle(delta.id);
       return;
     }
-    void settle(delta.id);
+    if (outcome === "interrupted") {
+      void handleQueueTerminalChange(createDeps());
+    }
   });
 
   void interruptStalePendingOnStartup();
 });
+
+async function rerouteIdlePendingOnNewDownload(): Promise<void> {
+  const deps = createDeps();
+  await handleDownloadStartedDuringCountdown(deps);
+  const pending = normalizePending(await pendingActionItem.getValue());
+  if (pending?.status === "cancelled" && pending.requiresIdleDownloads) {
+    suppressDisconnect = true;
+    session.close();
+    suppressDisconnect = false;
+  }
+}
 
 function settle(downloadId: number): Promise<void> {
   return processCompletedDownload(createDeps(), downloadId).catch((error: unknown) => {
@@ -142,6 +174,20 @@ function createDeps(): AutomationDeps {
     },
     async setPending(pending) {
       await pendingActionItem.setValue(pending);
+    },
+    async getDeferred() {
+      return await getDeferredTriggerValue();
+    },
+    async setDeferred(deferred) {
+      await setDeferredTriggerValue(deferred);
+    },
+    async hasActiveDownloads() {
+      const downloads = browser.downloads;
+      if (!downloads) {
+        return false;
+      }
+      const active = await downloads.search({ state: "in_progress", limit: 1 });
+      return active.length > 0;
     },
     async permissionGranted() {
       const permission = normalizePermission(await permissionItem.getValue());
@@ -324,6 +370,8 @@ function snapshotFromItem(item: {
   filename: string;
   fileSize: number;
   mime: string;
+  url?: string;
+  finalUrl?: string;
   endTime?: string;
 }): DownloadItemSnapshot {
   return {
@@ -332,6 +380,8 @@ function snapshotFromItem(item: {
     filename: item.filename,
     fileSize: item.fileSize,
     mime: item.mime,
+    url: item.url,
+    finalUrl: item.finalUrl,
     endTime: item.endTime,
   };
 }
