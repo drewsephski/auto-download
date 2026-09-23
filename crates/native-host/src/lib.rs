@@ -1,7 +1,8 @@
 //! Download Automations native host library.
 //!
 //! The browser can ask only for typed, allowlisted operations. This crate does not
-//! spawn processes or accept shell commands.
+//! construct shell commands, scripts, or executable arguments. On macOS, the audited
+//! `system_shutdown` dependency invokes fixed System Events AppleScript operations.
 
 pub mod host_io;
 pub mod install;
@@ -9,6 +10,7 @@ pub mod os_adapter;
 pub mod protocol;
 #[cfg(test)]
 mod safety;
+pub mod session;
 
 /// Native messaging host name. Keep this identical to `NATIVE_HOST_NAME` in the extension.
 pub const HOST_NAME: &str = "dev.downloadautomations.host";
@@ -17,13 +19,13 @@ pub const HOST_NAME: &str = "dev.downloadautomations.host";
 pub const HOST_DESCRIPTION: &str = "Download Automations native messaging host";
 
 /// Protocol version spoken by this host. Responses always use this version.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// How the binary was started. Chrome passes the extension origin as an argument;
 /// that must never be treated as a command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InvocationMode {
-    /// Read one native-messaging request from stdin and write one response to stdout.
+    /// Read native-messaging requests until the browser disconnects.
     NativeHost,
     /// Developer install, verify, or uninstall command.
     Cli,

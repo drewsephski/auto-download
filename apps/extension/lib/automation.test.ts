@@ -1,7 +1,8 @@
 import { describe, expect, test } from "vitest";
 import { processCompletedDownload, type AutomationDeps } from "./automation";
 import type { DownloadCompletedEvent, DownloadItemSnapshot } from "./download-event";
-import type { NativeRequest } from "./protocol";
+import type { PendingAction } from "./pending";
+import type { CancelActionRequest, OneShotRequest, ScheduleActionRequest } from "./protocol";
 import type { ExecutionRecord } from "./records";
 import { createDefaultSettings, withRuleEnabled, type Settings } from "./settings";
 
@@ -11,13 +12,15 @@ describe("completed download automation", () => {
     await processCompletedDownload(harness.deps, 3);
     await processCompletedDownload(harness.deps, 3);
     expect(harness.sent).toHaveLength(1);
-    expect(harness.sent[0]).toMatchObject({ type: "execute_action", action: "sleep", dryRun: true });
+    expect(harness.sent[0]).toMatchObject({ type: "execute_action", action: "sleep", executionMode: "dry_run" });
+    expect(harness.scheduled).toHaveLength(0);
     expect(harness.downloads).toHaveLength(1);
     expect(harness.executions).toEqual([
       expect.objectContaining({
         ok: true,
         executed: false,
-        dryRun: true,
+        executionMode: "dry_run",
+        status: "simulated",
         message: "Would put this computer to sleep",
       }),
     ]);
@@ -57,21 +60,110 @@ describe("completed download automation", () => {
 
   test("serializes two completion events for the same download", async () => {
     const harness = createHarness({ settings: withRuleEnabled(createDefaultSettings(), true) });
-    await Promise.all([
-      processCompletedDownload(harness.deps, 8),
-      processCompletedDownload(harness.deps, 8),
-    ]);
+    await Promise.all([processCompletedDownload(harness.deps, 8), processCompletedDownload(harness.deps, 8)]);
     expect(harness.sent).toHaveLength(1);
+  });
+
+  test("schedules one real sleep and does not schedule the same download again", async () => {
+    const settings = withRuleEnabled(createDefaultSettings(), true);
+    settings.rules[0] = { ...settings.rules[0]!, executionMode: "real" };
+    const harness = createHarness({
+      settings,
+      permissionGranted: true,
+      notificationsGranted: true,
+    });
+    await processCompletedDownload(harness.deps, 3);
+    await processCompletedDownload(harness.deps, 3);
+    expect(harness.scheduled).toHaveLength(1);
+    expect(harness.scheduled[0]).toMatchObject({ action: "sleep", executionMode: "real", countdownSeconds: 30 });
+    expect(harness.notifications).toEqual(["act-1"]);
+    expect(harness.pending?.status).toBe("scheduled");
+    expect(harness.executions[0]).toMatchObject({ status: "scheduled", executed: false });
+  });
+
+  test("does not schedule real shutdown", async () => {
+    const settings = withRuleEnabled(createDefaultSettings(), true);
+    settings.rules[0] = { ...settings.rules[0]!, action: "shutdown", executionMode: "real" };
+    const harness = createHarness({
+      settings,
+      permissionGranted: true,
+      notificationsGranted: true,
+    });
+    await processCompletedDownload(harness.deps, 3);
+    expect(harness.scheduled).toHaveLength(0);
+    expect(harness.executions[0]).toMatchObject({ ok: false, errorCode: "real_action_not_enabled", executed: false });
+  });
+
+  test("records a second download without scheduling another sleep", async () => {
+    const settings = withRuleEnabled(createDefaultSettings(), true);
+    settings.rules[0] = { ...settings.rules[0]!, executionMode: "real" };
+    const harness = createHarness({
+      settings,
+      permissionGranted: true,
+      notificationsGranted: true,
+      liveSession: true,
+    });
+    await processCompletedDownload(harness.deps, 3);
+    await processCompletedDownload(harness.deps, 4);
+    expect(harness.scheduled).toHaveLength(1);
+    expect(harness.downloads).toHaveLength(2);
+    expect(harness.executions[0]).toMatchObject({ status: "coalesced" });
+  });
+
+  test("cancels a scheduled sleep when the notification cannot be shown", async () => {
+    const settings = withRuleEnabled(createDefaultSettings(), true);
+    settings.rules[0] = { ...settings.rules[0]!, executionMode: "real" };
+    const harness = createHarness({
+      settings,
+      permissionGranted: true,
+      notificationsGranted: true,
+      notificationShown: false,
+    });
+    await processCompletedDownload(harness.deps, 3);
+    expect(harness.cancelled).toHaveLength(1);
+    expect(harness.pending?.status).toBe("cancelled");
+    expect(harness.executions[0]).toMatchObject({ status: "cancelled", executed: false });
+  });
+
+  test("records a schedule failure once and does not retry it", async () => {
+    const settings = withRuleEnabled(createDefaultSettings(), true);
+    settings.rules[0] = { ...settings.rules[0]!, executionMode: "real" };
+    const harness = createHarness({
+      settings,
+      permissionGranted: true,
+      notificationsGranted: true,
+      scheduleError: new Error("Native host has exited."),
+    });
+    await processCompletedDownload(harness.deps, 3);
+    await processCompletedDownload(harness.deps, 3);
+    expect(harness.scheduled).toHaveLength(0);
+    expect(harness.executions).toHaveLength(1);
+    expect(harness.executions[0]?.status).toBe("failed");
+    expect(harness.pending).toBeNull();
   });
 });
 
-function createHarness(options: { settings: Settings; state?: string; sendError?: Error }) {
-  const sent: NativeRequest[] = [];
+function createHarness(options: {
+  settings: Settings;
+  state?: string;
+  sendError?: Error;
+  scheduleError?: Error;
+  permissionGranted?: boolean;
+  notificationsGranted?: boolean;
+  notificationShown?: boolean;
+  liveSession?: boolean;
+}) {
+  const sent: OneShotRequest[] = [];
+  const scheduled: ScheduleActionRequest[] = [];
+  const cancelled: CancelActionRequest[] = [];
+  const notifications: string[] = [];
   const downloads: DownloadCompletedEvent[] = [];
   const executions: ExecutionRecord[] = [];
   let handled: number[] = [];
+  let pending: PendingAction | null = null;
   const settings = options.settings;
   const tails = new Map<string, Promise<void>>();
+  let requestCount = 0;
 
   const deps: AutomationDeps = {
     async getDownload(id): Promise<DownloadItemSnapshot | null> {
@@ -106,6 +198,21 @@ function createHarness(options: { settings: Settings; state?: string; sendError?
     async setExecutionHistory(records) {
       executions.splice(0, executions.length, ...records);
     },
+    async getPending() {
+      return pending;
+    },
+    async setPending(next) {
+      pending = next;
+    },
+    async permissionGranted() {
+      return options.permissionGranted ?? false;
+    },
+    async notificationsGranted() {
+      return options.notificationsGranted ?? false;
+    },
+    hasLiveSession() {
+      return (options.liveSession ?? false) || pending?.status === "scheduled";
+    },
     async send(request) {
       if (options.sendError) {
         throw options.sendError;
@@ -115,12 +222,12 @@ function createHarness(options: { settings: Settings; state?: string; sendError?
         throw new Error("unexpected request");
       }
       return {
-        protocolVersion: 1,
+        protocolVersion: 2,
         requestId: request.requestId,
         ok: true,
         result: {
           executed: false,
-          dryRun: true,
+          executionMode: "dry_run",
           action: request.action,
           message:
             request.action === "sleep"
@@ -131,8 +238,52 @@ function createHarness(options: { settings: Settings; state?: string; sendError?
         },
       };
     },
+    async schedule(request) {
+      if (options.scheduleError) {
+        throw options.scheduleError;
+      }
+      scheduled.push(request);
+      return {
+        protocolVersion: 2,
+        requestId: request.requestId,
+        ok: true,
+        result: {
+          status: "scheduled",
+          actionId: request.actionId,
+          action: "sleep",
+          executionMode: "real",
+          countdownSeconds: 30,
+        },
+      };
+    },
+    async cancel(request) {
+      cancelled.push(request);
+      return {
+        protocolVersion: 2,
+        requestId: request.requestId,
+        ok: true,
+        result: {
+          status: "cancelled",
+          actionId: request.actionId,
+          action: "sleep",
+          executionMode: "real",
+          countdownSeconds: 30,
+        },
+      };
+    },
+    async showSleepNotification(actionId) {
+      notifications.push(actionId);
+      return options.notificationShown ?? true;
+    },
+    async clearNotification() {
+      return undefined;
+    },
     now: () => 1_700_000_000_000,
-    newRequestId: () => "req-test",
+    newRequestId: () => {
+      requestCount += 1;
+      return `req-${requestCount}`;
+    },
+    newActionId: () => "act-1",
     lock: async (name, task) => {
       const previous = tails.get(name) ?? Promise.resolve();
       let release = () => {};
@@ -155,8 +306,14 @@ function createHarness(options: { settings: Settings; state?: string; sendError?
   return {
     deps,
     sent,
+    scheduled,
+    cancelled,
+    notifications,
     downloads,
     executions,
+    get pending() {
+      return pending;
+    },
     get handled() {
       return handled;
     },

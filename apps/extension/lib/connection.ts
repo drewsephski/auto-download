@@ -1,14 +1,15 @@
-import { capabilitiesRequest, parseHostResponse, pingRequest, type NativeRequest } from "./protocol";
+import { capabilitiesRequest, parseHostResponse, pingRequest, type OneShotRequest } from "./protocol";
 import { describeNativeFailure } from "./native-status";
 
 export interface ConnectionStatus {
   state: "connected" | "not_installed" | "error";
   title: string;
   message: string;
+  realSleepSupported: boolean;
 }
 
 export async function checkConnection(
-  send: (request: NativeRequest) => Promise<unknown>,
+  send: (request: OneShotRequest) => Promise<unknown>,
   createRequestId: () => string,
 ): Promise<ConnectionStatus> {
   const pingId = createRequestId();
@@ -33,14 +34,17 @@ export async function checkConnection(
   }
 
   const capabilities = parseHostResponse(capabilitiesId, "get_capabilities", capabilitiesPayload);
-  if (!capabilities.ok) {
-    return errorStatus(capabilities.message);
+  if (!capabilities.ok || capabilities.type !== "get_capabilities") {
+    return errorStatus(capabilities.ok ? "The helper returned an unexpected result." : capabilities.message);
   }
 
   return {
     state: "connected",
     title: "Connected",
-    message: "The helper answered and will only simulate actions.",
+    message: capabilities.realSleepSupported
+      ? "The helper is connected. Real sleep can be armed after setup."
+      : "The helper is connected. Only dry-run actions are available.",
+    realSleepSupported: capabilities.realSleepSupported,
   };
 }
 
@@ -51,6 +55,7 @@ function fromFailure(error: unknown): ConnectionStatus {
       state: "not_installed",
       title: "Not installed",
       message: failure.message,
+      realSleepSupported: false,
     };
   }
   return errorStatus(failure.message);
@@ -61,5 +66,6 @@ function errorStatus(message: string): ConnectionStatus {
     state: "error",
     title: "Error",
     message,
+    realSleepSupported: false,
   };
 }

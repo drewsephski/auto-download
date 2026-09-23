@@ -1,5 +1,10 @@
 //! Guards against accidentally adding shell execution or stdout logging
 //! on the native-messaging path.
+//!
+//! Download Automations does not accept or construct arbitrary shell commands or
+//! executable arguments. These tests cover this crate's sources. On macOS, the
+//! audited `system_shutdown` dependency invokes fixed System Events AppleScript
+//! operations from its own crate.
 
 #[cfg(test)]
 mod tests {
@@ -16,11 +21,12 @@ mod tests {
     }
 
     #[test]
-    fn sources_do_not_spawn_processes() {
+    fn sources_do_not_construct_process_commands() {
         let sources = [
             ("lib.rs", include_str!("lib.rs")),
             ("protocol.rs", include_str!("protocol.rs")),
             ("os_adapter.rs", include_str!("os_adapter.rs")),
+            ("session.rs", include_str!("session.rs")),
             ("host_io.rs", include_str!("host_io.rs")),
             ("install.rs", include_str!("install.rs")),
             ("main.rs", include_str!("main.rs")),
@@ -44,6 +50,7 @@ mod tests {
             ("lib.rs", include_str!("lib.rs")),
             ("protocol.rs", include_str!("protocol.rs")),
             ("os_adapter.rs", include_str!("os_adapter.rs")),
+            ("session.rs", include_str!("session.rs")),
             ("host_io.rs", include_str!("host_io.rs")),
             ("install.rs", include_str!("install.rs")),
             ("safety.rs", include_str!("safety.rs")),

@@ -1,8 +1,8 @@
 # Download Automations
 
-Download Automations is a Manifest V3 Chrome extension that can react when a browser download finishes. This repository is the first vertical slice: a completed download can ask a local Rust host to **simulate** sleep, shut down, or restart. The host does not perform those actions.
+Download Automations is a Manifest V3 Chrome extension that can react when a browser download finishes. A completed download can ask a local Rust host to simulate sleep, shut down, or restart. Real execution is limited to sleep, and only after a 30-second countdown that the user can cancel.
 
-Chrome talks to the host only through [Native Messaging](https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging). There is no local HTTP server.
+Chrome talks to the host only through [Native Messaging](https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging). There is no local HTTP server, daemon, or scheduled job.
 
 ## Layout
 
@@ -21,7 +21,7 @@ pnpm typecheck
 pnpm lint
 pnpm check
 cargo test --workspace
-cargo fmt --check
+cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
@@ -39,7 +39,8 @@ The exact macOS sequence is in [docs/local-development.md](docs/local-developmen
 
 ## Safety boundary
 
-The extension cannot send a shell command, script, or executable path. The host accepts three message types (`ping`, `get_capabilities`, `execute_action`) and three actions (`sleep`, `shutdown`, `reboot`). `execute_action` is rejected unless `dryRun` is `true`. Real power APIs are not called.
+Download Automations does not accept or construct arbitrary shell commands, scripts, paths, or executable arguments. The host accepts `ping`, `get_capabilities`, `request_permission`, `execute_action`, `schedule_action`, and `cancel_action`. Dry-run actions are `sleep`, `shutdown`, and `reboot`. The only real action is `sleep`, and it runs only while Chrome keeps the native messaging port open through a countdown of at least 10 seconds. This extension always requests 30 seconds.
 
-Permissions are `storage`, `downloads`, and `nativeMessaging`. There are no host permissions and no content scripts.
-# auto-download
+On macOS, the audited `system_shutdown` dependency invokes fixed System Events AppleScript operations. Closing Chrome, disconnecting the port, or pressing Cancel discards a pending sleep. The host does not retry a failed sleep.
+
+Permissions are `storage`, `downloads`, `nativeMessaging`, and `notifications`. There are no host permissions and no content scripts.

@@ -41,7 +41,7 @@ An unpacked extension's ID is derived from the directory path. Loading this outp
 
 ## 5. Build and install the native host
 
-`cargo run` builds the debug binary and registers that absolute path. Chrome will launch that binary later, so leave the project where it is. Run `install` again after `cargo clean` or after moving the repository.
+`cargo run` builds the debug binary and registers that absolute path. Chrome will launch that binary later, so leave the project where it is. Run `install` again after `cargo clean`, after moving the repository, or after pulling a host change. Protocol version 2 is not compatible with a version 1 helper. The popup reports that the helper must be updated.
 
 ```bash
 cargo run -p native-host -- install \
@@ -85,17 +85,34 @@ You should see the manifest path, the binary path, and the allowed origin. If th
 
 Reload the extension at `chrome://extensions` if it was loaded before you installed the host. Open the Download Automations popup and choose **Test connection**.
 
-- **Connected** means ping and `get_capabilities` succeeded, and the host is dry-run only.
+- **Connected** means ping and `get_capabilities` succeeded on protocol version 2.
 - **Not installed** means Chrome could not find `dev.downloadautomations.host`. Repeat the install command. The popup shows the command with this extension's ID.
-- **Error** usually means the allowlist ID does not match, or the recorded binary cannot start. Run verify, then install again with the ID from the popup.
+- **Error** can mean the allowlist ID does not match, the recorded binary cannot start, or the installed helper is still protocol version 1. Run verify, then install again with the ID from the popup.
 
-The popup always shows a **DRY RUN** banner. Sleep, Shut down, and Restart are labels only.
+The popup shows **DRY RUN** until real sleep is armed.
 
-## 8. Enable automation
+## 8. Allow macOS control
 
-Turn on **Enable after-download automation** and choose Sleep, Shut down, or Restart. The choice is stored in extension storage and remains after the browser restarts. The default is off.
+Real sleep uses System Events. Choose **Allow macOS control** in the popup. macOS may ask whether the helper can control System Events. That button is the only place this request is sent. A finished download does not open it.
 
-## 9. Download a harmless file
+The popup says **macOS permission granted** only after the helper reports success. Until then, real mode stays unavailable. Dry run does not need this permission.
+
+If Chrome notifications are blocked, real mode also stays unavailable. The cancel button lives on a notification, so the extension will not arm real sleep without one.
+
+## 9. Enable automation
+
+Turn on **Enable after-download automation**. Choose Sleep, Shut down, or Restart. Dry run is the default execution mode and works for all three.
+
+To arm real sleep:
+
+1. Leave the action on Sleep.
+2. Choose **Real**.
+3. Read the confirmation. It says a finished download can sleep this Mac, that there is a 30-second cancel window, and that closing Chrome or losing the helper cancels the pending sleep.
+4. Choose **Enable real sleep**.
+
+The banner changes to **LIVE — SLEEP ENABLED**. Shut down and Restart cannot be switched to real. The host would reject those requests anyway.
+
+## 10. Download a harmless file
 
 In Chrome, download a small public file, for example:
 
@@ -105,17 +122,27 @@ https://github.com/github/gitignore/archive/refs/heads/main.zip
 
 Any other small file you are comfortable saving is fine. The extension does not read the file.
 
-## 10. Confirm the dry run
+## 11. Confirm the result
 
 Open the popup again.
+
+Dry run:
 
 - **Latest download** shows the file name, not the full path.
 - **Latest result** shows `Would put this computer to sleep`, or the shut-down / restart sentence for the action you chose.
 - The computer does not sleep, shut down, or restart.
-- Downloading the same completed item does not add a second result. A second, different download adds one new result when automation is still enabled.
-- If automation is off, the download can still appear and no result is added.
 
-## 11. Remove the host registration
+Real sleep:
+
+- A Chrome notification says the Mac will sleep in 30 seconds and offers **Cancel**.
+- The popup can also show **Cancel sleep**.
+- Cancel, closing Chrome, reloading the extension, or a helper disconnect leaves the computer awake.
+- If you do not cancel, the host calls sleep once after the deadline. It does not retry a failure.
+- A second download during the countdown does not start a second sleep.
+
+Downloading the same completed item does not add a second result. If automation is off, the download can still appear and no result is added.
+
+## 12. Remove the host registration
 
 ```bash
 cargo run -p native-host -- uninstall --browser chrome
@@ -128,9 +155,11 @@ That deletes the user-level manifest. It does not delete the built binary. Runni
 ```bash
 pnpm check
 cargo test --workspace
-cargo fmt --check
+cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 ```
+
+`cargo test` uses a fake power controller. It does not sleep, shut down, or restart the machine. One ignored test calls real sleep only when both `--ignored` and `ALLOW_REAL_SLEEP_TEST=1` are set. Do not set that variable for normal checks.
 
 `pnpm check` includes a Playwright test that loads the built extension and reads the popup. Branded Google Chrome ignores `--load-extension`, so that test uses Playwright's Chromium. It does not install the native host and does not claim a native-messaging round trip. Use **Test connection** in your own Chrome profile for that.
 

@@ -5,7 +5,7 @@ import { DRY_RUN_MESSAGES, EXTENSION_PERMISSIONS, NATIVE_HOST_NAME } from "./con
 
 describe("shared constants", () => {
   test("requests only the permissions this slice uses", () => {
-    expect([...EXTENSION_PERMISSIONS].sort()).toEqual(["downloads", "nativeMessaging", "storage"]);
+    expect([...EXTENSION_PERMISSIONS].sort()).toEqual(["downloads", "nativeMessaging", "notifications", "storage"]);
   });
 
   test("host name matches the rust constant", () => {

@@ -11,7 +11,12 @@ test("popup renders the dry-run utility", async () => {
     host_permissions?: unknown;
     content_scripts?: unknown;
   };
-  expect([...(manifest.permissions ?? [])].sort()).toEqual(["downloads", "nativeMessaging", "storage"]);
+  expect([...(manifest.permissions ?? [])].sort()).toEqual([
+    "downloads",
+    "nativeMessaging",
+    "notifications",
+    "storage",
+  ]);
   expect(manifest.host_permissions ?? []).toEqual([]);
   expect(manifest.content_scripts).toBeUndefined();
 
@@ -30,7 +35,7 @@ test("popup renders the dry-run utility", async () => {
     const page = await context.newPage();
     await page.goto(`chrome-extension://${extensionId}/popup.html`);
     await expect(page.getByRole("heading", { name: "Download Automations" })).toBeVisible();
-    await expect(page.getByText("DRY RUN")).toBeVisible();
+    await expect(page.getByText("DRY RUN", { exact: true })).toBeVisible();
     await expect(page.getByRole("switch", { name: "Enable after-download automation" })).toBeVisible();
     await expect(page.getByRole("radio", { name: "Sleep" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Test connection" })).toBeVisible();
