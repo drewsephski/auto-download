@@ -7,8 +7,10 @@ import { createDefaultSettings, withRuleAction, withRuleEnabled, type Settings }
 const event: DownloadCompletedEvent = {
   downloadId: 4,
   filename: "example.zip",
-  fileSize: 10,
+  extension: "zip",
   mime: "application/zip",
+  sizeBytes: 10,
+  sourceHost: null,
   completedAt: 1,
 };
 
@@ -33,35 +35,30 @@ describe("automation decisions", () => {
     expect(planAutomations(createDefaultSettings(), event, () => "req-1", () => "act-1", closed)).toEqual([]);
   });
 
-  test("plans one dry-run action for each enabled rule", () => {
+  test("uses first-match rule ordering for enabled rules", () => {
     const settings = withRuleEnabled(createDefaultSettings(), true);
     settings.rules.push({
       id: "later",
+      revision: 1,
       enabled: false,
       action: "reboot",
       executionMode: "dry_run",
       countdownSeconds: 30,
+      conditions: { filenamePattern: null, extensions: [], sourceHosts: [], minSizeBytes: null, maxSizeBytes: null },
+      waitForAllDownloads: false,
     });
     settings.rules.push({
       id: "also",
+      revision: 1,
       enabled: true,
       action: "shutdown",
       executionMode: "dry_run",
       countdownSeconds: 30,
+      conditions: { filenamePattern: null, extensions: [], sourceHosts: [], minSizeBytes: null, maxSizeBytes: null },
+      waitForAllDownloads: false,
     });
-    let count = 0;
-    const plans = planAutomations(
-      settings,
-      event,
-      () => {
-        count += 1;
-        return `req-${count}`;
-      },
-      () => "act-1",
-      closed,
-    );
-    expect(plans.map((plan) => (plan.kind === "dry_run" ? plan.action : plan.kind))).toEqual(["sleep", "shutdown"]);
-    expect(plans.every((plan) => plan.kind === "dry_run" && plan.request.executionMode === "dry_run")).toBe(true);
+    const plans = planAutomations(settings, event, () => "req-1", () => "act-1", closed);
+    expect(plans.map((plan) => (plan.kind === "dry_run" ? plan.action : plan.kind))).toEqual(["sleep"]);
     if (plans[0]?.kind === "dry_run") {
       expect(plans[0].request.context).toEqual({ downloadId: 4, filename: "example.zip" });
     }
@@ -124,6 +121,6 @@ describe("automation decisions", () => {
 
 function armed(action: "sleep" | "shutdown" | "reboot"): Settings {
   const settings = withRuleEnabled(withRuleAction(createDefaultSettings(), action), true);
-  settings.rules[0] = { ...settings.rules[0]!, executionMode: "real" };
+  settings.rules[0] = { ...settings.rules[0]!, executionMode: "real", revision: settings.rules[0]!.revision + 1 };
   return settings;
 }

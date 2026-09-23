@@ -1,5 +1,7 @@
 import { Download } from "lucide-react";
+import { browser } from "wxt/browser";
 import { pendingCopy } from "../../lib/action-copy";
+import { summarizeConditions } from "../../lib/condition-summary";
 import { modePresentation, realConfirmation } from "../../lib/arming";
 import { NATIVE_HOST_NAME } from "../../lib/constants";
 import { formatFileSize } from "../../lib/format";
@@ -82,6 +84,23 @@ export function App() {
           </Button>
         </section>
       ) : null}
+
+      <section className="rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2">
+        <p className="text-xs font-medium tracking-wide text-zinc-400 uppercase">Conditions</p>
+        <p className="mt-1 text-sm text-zinc-100">
+          {summarizeConditions(model.rule.conditions, model.rule.waitForAllDownloads)}
+        </p>
+        <Button
+          className="mt-2"
+          onClick={() => {
+            void browser.runtime.openOptionsPage();
+          }}
+          type="button"
+          variant="secondary"
+        >
+          Edit conditions
+        </Button>
+      </section>
 
       <div className="flex items-center justify-between gap-3">
         <span className="text-sm text-zinc-100">Enable after-download automation</span>
@@ -180,7 +199,9 @@ export function App() {
         {model.latestDownload ? (
           <p className="mt-1 truncate text-sm text-zinc-100" title={model.latestDownload.filename}>
             {model.latestDownload.filename}
-            <span className="text-zinc-500"> · {formatFileSize(model.latestDownload.fileSize)}</span>
+            {model.latestDownload.sizeBytes !== null ? (
+              <span className="text-zinc-500"> · {formatFileSize(model.latestDownload.sizeBytes)}</span>
+            ) : null}
           </p>
         ) : (
           <p className="mt-1 text-sm text-zinc-500">No completed downloads yet.</p>

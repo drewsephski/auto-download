@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { HISTORY_LIMIT } from "./constants";
 import type { DownloadCompletedEvent } from "./download-event";
+import { downloadCompletedEventSchema, normalizeLegacyDownloadEvent } from "./download-event";
 import { prependBounded } from "./history";
 import { executionModeSchema, powerActionSchema } from "./settings";
 
@@ -17,13 +18,15 @@ export const executionStatusSchema = z.enum([
 
 export type ExecutionStatus = z.infer<typeof executionStatusSchema>;
 
-export const downloadRecordSchema = z.strictObject({
+const legacyDownloadRecordSchema = z.strictObject({
   downloadId: z.number().int().nonnegative(),
   filename: z.string().min(1).max(255),
   fileSize: z.number().int().nonnegative(),
   mime: z.string().nullable(),
   completedAt: z.number().int().nonnegative(),
 });
+
+export const downloadRecordSchema = downloadCompletedEventSchema;
 
 export const executionRecordSchema = z.strictObject({
   id: z.string().min(1),
@@ -75,7 +78,33 @@ const legacyExecutionRecordSchema = z
 export type ExecutionRecord = z.infer<typeof executionRecordSchema>;
 
 export function normalizeDownloadHistory(input: unknown): DownloadCompletedEvent[] {
-  return normalizeRecords(input, downloadRecordSchema);
+  if (!Array.isArray(input)) {
+    return [];
+  }
+  const records: DownloadCompletedEvent[] = [];
+  for (const item of input) {
+    const current = downloadRecordSchema.safeParse(item);
+    if (current.success) {
+      records.push(current.data);
+      continue;
+    }
+    const legacy = legacyDownloadRecordSchema.safeParse(item);
+    if (legacy.success) {
+      records.push(
+        normalizeLegacyDownloadEvent({
+          downloadId: legacy.data.downloadId,
+          filename: legacy.data.filename,
+          fileSize: legacy.data.fileSize,
+          mime: legacy.data.mime,
+          completedAt: legacy.data.completedAt,
+        }),
+      );
+    }
+    if (records.length >= HISTORY_LIMIT) {
+      break;
+    }
+  }
+  return records;
 }
 
 export function normalizeExecutionHistory(input: unknown): ExecutionRecord[] {
@@ -103,21 +132,4 @@ export function normalizeExecutionHistory(input: unknown): ExecutionRecord[] {
 export function upsertExecution(history: readonly ExecutionRecord[], record: ExecutionRecord, limit = HISTORY_LIMIT): ExecutionRecord[] {
   const rest = history.filter((item) => item.id !== record.id);
   return prependBounded(rest, record, limit);
-}
-
-function normalizeRecords<T>(input: unknown, schema: z.ZodType<T>): T[] {
-  if (!Array.isArray(input)) {
-    return [];
-  }
-  const records: T[] = [];
-  for (const item of input) {
-    const parsed = schema.safeParse(item);
-    if (parsed.success) {
-      records.push(parsed.data);
-    }
-    if (records.length >= HISTORY_LIMIT) {
-      break;
-    }
-  }
-  return records;
 }

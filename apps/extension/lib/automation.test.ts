@@ -184,6 +184,8 @@ function createHarness(options: {
   const executions: ExecutionRecord[] = [];
   let handled: number[] = [];
   let pending: PendingAction | null = null;
+  let deferred: import("./deferred-trigger").DeferredTrigger | null = null;
+  const activeDownloads = false;
   const settings = options.settings;
   const tails = new Map<string, Promise<void>>();
   let requestCount = 0;
@@ -226,6 +228,15 @@ function createHarness(options: {
     },
     async setPending(next) {
       pending = next;
+    },
+    async getDeferred() {
+      return deferred;
+    },
+    async setDeferred(next) {
+      deferred = next;
+    },
+    async hasActiveDownloads() {
+      return activeDownloads;
     },
     async permissionGranted() {
       return options.permissionGranted ?? false;

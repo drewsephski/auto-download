@@ -41,6 +41,7 @@ test("popup renders the dry-run utility", async () => {
     await expect(page.getByRole("radio", { name: "Shut down" })).toBeVisible();
     await expect(page.getByRole("radio", { name: "Restart" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Test connection" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Edit conditions" })).toBeVisible();
 
     await page.getByRole("radio", { name: "Shut down" }).click();
     await page.getByRole("radio", { name: "Real" }).click();

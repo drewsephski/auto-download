@@ -22,6 +22,9 @@ export const pendingActionSchema = z.strictObject({
   scheduledAt: z.number().int().nonnegative(),
   executeAt: z.number().int().nonnegative(),
   status: pendingStatusSchema,
+  ruleId: z.string().min(1).max(64).optional(),
+  ruleRevision: z.number().int().positive().optional(),
+  requiresIdleDownloads: z.boolean().optional(),
 });
 
 export type PendingAction = z.infer<typeof pendingActionSchema>;
@@ -74,6 +77,9 @@ export function createPendingAction(input: {
   filename: string;
   scheduledAt: number;
   countdownSeconds: number;
+  ruleId?: string;
+  ruleRevision?: number;
+  requiresIdleDownloads?: boolean;
 }): PendingAction {
   return pendingActionSchema.parse({
     actionId: input.actionId,
@@ -84,5 +90,12 @@ export function createPendingAction(input: {
     scheduledAt: input.scheduledAt,
     executeAt: input.scheduledAt + input.countdownSeconds * 1000,
     status: "scheduled",
+    ruleId: input.ruleId,
+    ruleRevision: input.ruleRevision,
+    requiresIdleDownloads: input.requiresIdleDownloads,
   });
+}
+
+export function pendingRequiresIdleReroute(pending: PendingAction): boolean {
+  return pending.requiresIdleDownloads === true && pending.status === "scheduled";
 }

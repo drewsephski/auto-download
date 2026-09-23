@@ -40,7 +40,7 @@ export function prepareRealAction(settings: Settings, rule: AutomationRule, gate
   return {
     ok: true,
     settings: {
-      version: 2,
+      version: 3,
       rules: settings.rules.map((candidate) => {
         if (candidate.id !== rule.id) {
           return candidate;
@@ -50,6 +50,7 @@ export function prepareRealAction(settings: Settings, rule: AutomationRule, gate
           action: rule.action,
           executionMode: "real",
           countdownSeconds: 30,
+          revision: candidate.executionMode === "real" ? candidate.revision : candidate.revision + 1,
         };
       }),
     },

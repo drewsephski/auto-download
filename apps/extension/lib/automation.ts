@@ -1,10 +1,13 @@
 import { coalesceMessage, notificationBlockedMessage, scheduledMessage } from "./action-copy";
 import { HANDLED_DOWNLOAD_LIMIT, HISTORY_LIMIT } from "./constants";
 import { claimDownload } from "./dedup";
-import { planAutomations, type PlannedAction } from "./decision";
+import { findFirstMatchingRule, planAutomationForRule, type PlannedAction } from "./decision";
+import type { DeferredTrigger } from "./deferred-trigger";
+import { deferredFromPendingMetadata } from "./deferred-trigger";
+import { QUEUE_LOCK, shouldDeferForIdle, upsertDeferred } from "./download-queue";
 import { toCompletedEvent, type DownloadCompletedEvent, type DownloadItemSnapshot } from "./download-event";
 import { describeNativeFailure } from "./native-status";
-import { createPendingAction, type PendingAction } from "./pending";
+import { createPendingAction, pendingRequiresIdleReroute, type PendingAction } from "./pending";
 import {
   cancelActionRequest,
   parseHostResponse,
@@ -13,7 +16,7 @@ import {
   type ScheduleActionRequest,
 } from "./protocol";
 import { upsertExecution, type ExecutionRecord } from "./records";
-import { normalizeSettings, type PowerAction, type Settings } from "./settings";
+import { normalizeSettings, type AutomationRule, type PowerAction, type Settings } from "./settings";
 
 export interface AutomationDeps {
   getDownload(id: number): Promise<DownloadItemSnapshot | null>;
@@ -26,6 +29,9 @@ export interface AutomationDeps {
   setExecutionHistory(records: ExecutionRecord[]): Promise<void>;
   getPending(): Promise<PendingAction | null>;
   setPending(pending: PendingAction | null): Promise<void>;
+  getDeferred(): Promise<DeferredTrigger | null>;
+  setDeferred(deferred: DeferredTrigger | null): Promise<void>;
+  hasActiveDownloads(): Promise<boolean>;
   permissionGranted(): Promise<boolean>;
   notificationsGranted(): Promise<boolean>;
   realActions(): Promise<readonly PowerAction[]>;
@@ -65,27 +71,136 @@ export async function processCompletedDownload(deps: AutomationDeps, downloadId:
       await deps.setDownloadHistory(prependDownload(history, event));
     });
 
+    await handleMatchedAutomation(deps, event);
+    await flushDeferredIfIdle(deps);
+  });
+}
+
+export async function handleQueueTerminalChange(deps: AutomationDeps): Promise<void> {
+  await flushDeferredIfIdle(deps);
+}
+
+export async function handleDownloadStartedDuringCountdown(deps: AutomationDeps): Promise<void> {
+  const pending = await deps.getPending();
+  if (!pending || !pendingRequiresIdleReroute(pending)) {
+    return;
+  }
+  if (!pending.ruleId || pending.ruleRevision === undefined) {
+    return;
+  }
+  await deps.lock("download-automations:dispatch", async () => {
+    const current = await deps.getPending();
+    if (!current || !pendingRequiresIdleReroute(current)) {
+      return;
+    }
+    await cancelPendingForReroute(deps, current);
+    const deferred = deferredFromPendingMetadata({
+      ruleId: current.ruleId!,
+      ruleRevision: current.ruleRevision!,
+      downloadId: current.downloadId,
+      filename: current.filename,
+      deferredAt: deps.now(),
+    });
+    await deps.setDeferred(deferred);
+  });
+}
+
+export async function flushDeferredIfIdle(deps: AutomationDeps): Promise<void> {
+  await deps.lock(QUEUE_LOCK, async () => {
+    if (await deps.hasActiveDownloads()) {
+      return;
+    }
+    const deferred = await deps.getDeferred();
+    if (!deferred) {
+      return;
+    }
+    const settings = normalizeSettings(await deps.getSettings());
+    const rule = settings.rules.find((item) => item.id === deferred.ruleId);
+    if (!rule || !rule.enabled || rule.revision !== deferred.ruleRevision) {
+      await deps.setDeferred(null);
+      return;
+    }
     await deps.lock("download-automations:dispatch", async () => {
-      const settings = normalizeSettings(await deps.getSettings());
-      const pending = await deps.getPending();
-      const needsRealActions = settings.rules.some((rule) => rule.enabled && rule.executionMode === "real");
-      const realActions = needsRealActions ? await deps.realActions().catch(() => []) : [];
-      const plans = planAutomations(settings, event, deps.newRequestId, deps.newActionId, {
-        permissionGranted: await deps.permissionGranted(),
-        notificationsGranted: await deps.notificationsGranted(),
-        realActions,
-        hasLiveSession: deps.hasLiveSession(),
-        pending,
-      });
-      for (const plan of plans) {
-        const record = await runPlan(deps, plan, event);
-        await remember(deps, record);
+      const stillDeferred = await deps.getDeferred();
+      if (!stillDeferred || stillDeferred.ruleId !== deferred.ruleId) {
+        return;
       }
+      if (await deps.hasActiveDownloads()) {
+        return;
+      }
+      const latestSettings = normalizeSettings(await deps.getSettings());
+      const latestRule = latestSettings.rules.find((item) => item.id === stillDeferred.ruleId);
+      if (!latestRule || !latestRule.enabled || latestRule.revision !== stillDeferred.ruleRevision) {
+        await deps.setDeferred(null);
+        return;
+      }
+      await executeAutomationForRule(deps, latestRule, stillDeferred.representativeDownload, {
+        requiresIdleDownloads: latestRule.waitForAllDownloads,
+      });
+      await deps.setDeferred(null);
     });
   });
 }
 
-async function runPlan(deps: AutomationDeps, plan: PlannedAction, event: DownloadCompletedEvent): Promise<ExecutionRecord> {
+async function handleMatchedAutomation(deps: AutomationDeps, event: DownloadCompletedEvent): Promise<void> {
+  await deps.lock("download-automations:dispatch", async () => {
+    const settings = normalizeSettings(await deps.getSettings());
+    const rule = findFirstMatchingRule(settings, event);
+    if (!rule) {
+      return;
+    }
+    const defer = await shouldDeferForIdle(rule, deps);
+    if (defer) {
+      const current = await deps.getDeferred();
+      const next = upsertDeferred(
+        current,
+        {
+          ruleId: rule.id,
+          ruleRevision: rule.revision,
+          representativeDownload: event,
+          deferredAt: deps.now(),
+        },
+        settings,
+      );
+      await deps.setDeferred(next);
+      return;
+    }
+    await executeAutomationForRule(deps, rule, event, {
+      requiresIdleDownloads: rule.waitForAllDownloads,
+    });
+  });
+}
+
+async function executeAutomationForRule(
+  deps: AutomationDeps,
+  rule: AutomationRule,
+  event: DownloadCompletedEvent,
+  options: { requiresIdleDownloads: boolean },
+): Promise<void> {
+  const pending = await deps.getPending();
+  const needsRealActions = rule.enabled && rule.executionMode === "real";
+  const realActions = needsRealActions ? await deps.realActions().catch(() => []) : [];
+  const plan = planAutomationForRule(rule, event, deps.newRequestId, deps.newActionId, {
+    permissionGranted: await deps.permissionGranted(),
+    notificationsGranted: await deps.notificationsGranted(),
+    realActions,
+    hasLiveSession: deps.hasLiveSession(),
+    pending,
+  });
+  if (!plan) {
+    return;
+  }
+  const record = await runPlan(deps, plan, event, rule, options.requiresIdleDownloads);
+  await remember(deps, record);
+}
+
+async function runPlan(
+  deps: AutomationDeps,
+  plan: PlannedAction,
+  event: DownloadCompletedEvent,
+  rule: AutomationRule,
+  requiresIdleDownloads: boolean,
+): Promise<ExecutionRecord> {
   if (plan.kind === "dry_run") {
     return runDryRun(deps, plan, event);
   }
@@ -122,7 +237,7 @@ async function runPlan(deps: AutomationDeps, plan: PlannedAction, event: Downloa
       errorCode: plan.code,
     };
   }
-  return runRealAction(deps, plan, event);
+  return runRealAction(deps, plan, event, rule, requiresIdleDownloads);
 }
 
 async function runDryRun(
@@ -175,6 +290,8 @@ async function runRealAction(
   deps: AutomationDeps,
   plan: Extract<PlannedAction, { kind: "real_action" }>,
   event: DownloadCompletedEvent,
+  rule: AutomationRule,
+  requiresIdleDownloads: boolean,
 ): Promise<ExecutionRecord> {
   const base = {
     id: plan.request.actionId,
@@ -241,6 +358,9 @@ async function runRealAction(
     filename: event.filename,
     scheduledAt: deps.now(),
     countdownSeconds: parsed.countdownSeconds,
+    ruleId: rule.id,
+    ruleRevision: rule.revision,
+    requiresIdleDownloads,
   });
   await deps.setPending(pending);
   const shown = await deps.showNotification(pending.action, pending.actionId);
@@ -265,6 +385,16 @@ async function runRealAction(
   };
 }
 
+async function cancelPendingForReroute(deps: AutomationDeps, pending: PendingAction): Promise<void> {
+  try {
+    await deps.cancel(cancelActionRequest({ requestId: deps.newRequestId(), actionId: pending.actionId }));
+  } catch {
+    // Connection loss already discarded the host-side action.
+  }
+  await deps.setPending({ ...pending, status: "cancelled" });
+  await deps.clearNotification(pending.actionId);
+}
+
 async function cancelPending(deps: AutomationDeps, actionId: string): Promise<void> {
   try {
     await deps.cancel(cancelActionRequest({ requestId: deps.newRequestId(), actionId }));
@@ -282,4 +412,8 @@ async function remember(deps: AutomationDeps, record: ExecutionRecord): Promise<
 
 function prependDownload(history: DownloadCompletedEvent[], event: DownloadCompletedEvent): DownloadCompletedEvent[] {
   return [event, ...history].slice(0, HISTORY_LIMIT);
+}
+
+export async function clearDeferredOnBrowserStartup(deps: Pick<AutomationDeps, "setDeferred">): Promise<void> {
+  await deps.setDeferred(null);
 }
