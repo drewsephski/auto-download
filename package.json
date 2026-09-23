@@ -1,0 +1,18 @@
+{
+  "name": "download-automations",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.33.2",
+  "scripts": {
+    "dev": "pnpm --filter extension dev",
+    "build": "pnpm --filter extension build",
+    "test": "pnpm --filter extension test",
+    "test:e2e": "pnpm --filter extension test:e2e",
+    "typecheck": "pnpm --filter extension typecheck",
+    "lint": "pnpm --filter extension lint",
+    "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm build && pnpm test:e2e",
+    "host:build": "cargo build -p native-host",
+    "host:verify": "cargo run -p native-host -- verify --browser chrome",
+    "host:uninstall": "cargo run -p native-host -- uninstall --browser chrome"
+  }
+}
