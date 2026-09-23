@@ -1,7 +1,8 @@
 import { browser } from "wxt/browser";
 import { defineBackground } from "wxt/utils/define-background";
+import { NOTIFICATION_TITLE, notificationMessage } from "../lib/action-copy";
 import { processCompletedDownload, type AutomationDeps } from "../lib/automation";
-import { CANCEL_PENDING_MESSAGE, NOTIFICATION_MESSAGE, NOTIFICATION_TITLE } from "../lib/constants";
+import { CANCEL_PENDING_MESSAGE } from "../lib/constants";
 import { downloadChangeOutcome, type DownloadItemSnapshot } from "../lib/download-event";
 import { describeCancelledPending, describeInterruptedPending, describeLifecycle } from "../lib/lifecycle";
 import { LiveHostSession } from "../lib/live-host-session";
@@ -15,9 +16,9 @@ import {
   isActivePending,
   normalizePending,
 } from "../lib/pending";
-import { cancelActionRequest, isCancelAck, isScheduleAck, parseHostResponse } from "../lib/protocol";
+import { cancelActionRequest, capabilitiesRequest, isCancelAck, isScheduleAck, parseHostResponse } from "../lib/protocol";
 import { normalizeDownloadHistory, normalizeExecutionHistory, upsertExecution } from "../lib/records";
-import { normalizeSettings } from "../lib/settings";
+import { normalizeSettings, type PowerAction } from "../lib/settings";
 import {
   downloadHistoryItem,
   executionHistoryItem,
@@ -147,6 +148,9 @@ function createDeps(): AutomationDeps {
       return permission.state === "granted";
     },
     notificationsGranted,
+    async realActions() {
+      return readRealActions();
+    },
     hasLiveSession() {
       return session.connected();
     },
@@ -159,9 +163,11 @@ function createDeps(): AutomationDeps {
     cancel(request) {
       return session.post(request, (payload) => isCancelAck(request.requestId, payload));
     },
-    showSleepNotification,
+    async showNotification(action, actionId) {
+      return showPowerNotification(action, actionId);
+    },
     async clearNotification(actionId) {
-      await clearSleepNotification(actionId);
+      await clearPowerNotification(actionId);
     },
     now() {
       return Date.now();
@@ -194,7 +200,7 @@ async function interruptStalePendingOnStartup(): Promise<void> {
   }
   await pendingActionItem.setValue(next.pending);
   await rememberExecution(describeInterruptedPending(next.pending));
-  await clearSleepNotification(next.pending.actionId);
+  await clearPowerNotification(next.pending.actionId);
 }
 
 async function markConnectionLost(): Promise<void> {
@@ -205,7 +211,21 @@ async function markConnectionLost(): Promise<void> {
   }
   await pendingActionItem.setValue(next.pending);
   await rememberExecution(describeInterruptedPending(next.pending));
-  await clearSleepNotification(next.pending.actionId);
+  await clearPowerNotification(next.pending.actionId);
+}
+
+async function readRealActions(): Promise<PowerAction[]> {
+  const requestId = crypto.randomUUID();
+  try {
+    const payload = await sendNativeRequest(capabilitiesRequest(requestId));
+    const parsed = parseHostResponse(requestId, "get_capabilities", payload);
+    if (!parsed.ok || parsed.type !== "get_capabilities") {
+      return [];
+    }
+    return parsed.realActions;
+  } catch {
+    return [];
+  }
 }
 
 async function applyHostEvent(payload: unknown): Promise<void> {
@@ -223,7 +243,7 @@ async function applyHostEvent(payload: unknown): Promise<void> {
   if (parsed.status === "executing") {
     return;
   }
-  await clearSleepNotification(pending.actionId);
+  await clearPowerNotification(pending.actionId);
   suppressDisconnect = true;
   session.close();
   suppressDisconnect = false;
@@ -248,20 +268,20 @@ async function cancelPendingAction(actionId?: string): Promise<void> {
       try {
         await session.post(request, (payload) => isCancelAck(request.requestId, payload));
       } catch {
-        // A lost connection already discarded the host-side sleep.
+        // A lost connection already discarded the host-side action.
       }
     }
     const cancelled = applyTerminalStatus(pending, "cancelled");
     await pendingActionItem.setValue(cancelled);
     await rememberExecution(describeCancelledPending(cancelled));
-    await clearSleepNotification(pending.actionId);
+    await clearPowerNotification(pending.actionId);
     session.close();
   } finally {
     suppressDisconnect = false;
   }
 }
 
-async function showSleepNotification(actionId: string): Promise<boolean> {
+async function showPowerNotification(action: PowerAction, actionId: string): Promise<boolean> {
   const notifications = browser.notifications;
   if (!notifications || !(await notificationsGranted())) {
     return false;
@@ -271,7 +291,7 @@ async function showSleepNotification(actionId: string): Promise<boolean> {
       type: "basic",
       iconUrl: browser.runtime.getURL("/icon-128.png"),
       title: NOTIFICATION_TITLE,
-      message: NOTIFICATION_MESSAGE,
+      message: notificationMessage(action),
       requireInteraction: true,
       buttons: [{ title: "Cancel" }],
     });
@@ -281,7 +301,7 @@ async function showSleepNotification(actionId: string): Promise<boolean> {
   }
 }
 
-async function clearSleepNotification(actionId: string): Promise<void> {
+async function clearPowerNotification(actionId: string): Promise<void> {
   const notifications = browser.notifications;
   if (!notifications) {
     return;
@@ -289,7 +309,7 @@ async function clearSleepNotification(actionId: string): Promise<void> {
   try {
     await notifications.clear(notificationIdForAction(actionId));
   } catch {
-    // Clearing a missing notification is not a reason to retry sleep.
+    // Clearing a missing notification is not a reason to retry the action.
   }
 }
 

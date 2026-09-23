@@ -42,6 +42,7 @@ function samplePending(): PendingAction {
   return createPendingAction({
     actionId: "act-1",
     requestId: "req-1",
+    action: "sleep",
     downloadId: 4,
     filename: "example.zip",
     scheduledAt: 1_000,

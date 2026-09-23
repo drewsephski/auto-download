@@ -89,28 +89,28 @@ Reload the extension at `chrome://extensions` if it was loaded before you instal
 - **Not installed** means Chrome could not find `dev.downloadautomations.host`. Repeat the install command. The popup shows the command with this extension's ID.
 - **Error** can mean the allowlist ID does not match, the recorded binary cannot start, or the installed helper is still protocol version 1. Run verify, then install again with the ID from the popup.
 
-The popup shows **DRY RUN** until real sleep is armed.
+The popup shows **DRY RUN** until a real action is armed.
 
 ## 8. Allow macOS control
 
-Real sleep uses System Events. Choose **Allow macOS control** in the popup. macOS may ask whether the helper can control System Events. That button is the only place this request is sent. A finished download does not open it.
+Real sleep, shut down, and restart use System Events. Choose **Allow macOS control** in the popup. macOS may ask whether the helper can control System Events. That button is the only place this request is sent. A finished download does not open it.
 
 The popup says **macOS permission granted** only after the helper reports success. Until then, real mode stays unavailable. Dry run does not need this permission.
 
-If Chrome notifications are blocked, real mode also stays unavailable. The cancel button lives on a notification, so the extension will not arm real sleep without one.
+If Chrome notifications are blocked, real mode also stays unavailable. The cancel button lives on a notification, so the extension will not arm a real action without one.
 
 ## 9. Enable automation
 
 Turn on **Enable after-download automation**. Choose Sleep, Shut down, or Restart. Dry run is the default execution mode and works for all three.
 
-To arm real sleep:
+To arm a real action:
 
-1. Leave the action on Sleep.
+1. Choose Sleep, Shut down, or Restart.
 2. Choose **Real**.
-3. Read the confirmation. It says a finished download can sleep this Mac, that there is a 30-second cancel window, and that closing Chrome or losing the helper cancels the pending sleep.
-4. Choose **Enable real sleep**.
+3. Read the confirmation. It names the 30-second cancel window and says that closing Chrome or losing the helper cancels the pending action. Shut down and Restart also warn that unsaved work in other applications can be lost.
+4. Choose **Enable real sleep**, **Enable real shut down**, or **Enable real restart**.
 
-The banner changes to **LIVE — SLEEP ENABLED**. Shut down and Restart cannot be switched to real. The host would reject those requests anyway.
+The banner changes to **LIVE — SLEEP ENABLED**, **LIVE — SHUT DOWN ENABLED**, or **LIVE — RESTART ENABLED**. Choosing a different action returns to dry run. That new action needs its own confirmation.
 
 ## 10. Download a harmless file
 
@@ -132,13 +132,13 @@ Dry run:
 - **Latest result** shows `Would put this computer to sleep`, or the shut-down / restart sentence for the action you chose.
 - The computer does not sleep, shut down, or restart.
 
-Real sleep:
+Real action:
 
-- A Chrome notification says the Mac will sleep in 30 seconds and offers **Cancel**.
-- The popup can also show **Cancel sleep**.
-- Cancel, closing Chrome, reloading the extension, or a helper disconnect leaves the computer awake.
-- If you do not cancel, the host calls sleep once after the deadline. It does not retry a failure.
-- A second download during the countdown does not start a second sleep.
+- A Chrome notification says the Mac will sleep, shut down, or restart in 30 seconds and offers **Cancel**. Shut down and restart also say to save open work.
+- The popup can show **Cancel sleep**, **Cancel shut down**, or **Cancel restart**.
+- Cancel, closing Chrome, reloading the extension, or a helper disconnect leaves the computer as it is.
+- If you do not cancel, the host calls that one action after the deadline. It does not retry a failure or substitute a different action.
+- A second download during the countdown does not start another timer or change the pending action.
 
 Downloading the same completed item does not add a second result. If automation is off, the download can still appear and no result is added.
 
@@ -159,7 +159,7 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-`cargo test` uses a fake power controller. It does not sleep, shut down, or restart the machine. One ignored test calls real sleep only when both `--ignored` and `ALLOW_REAL_SLEEP_TEST=1` are set. Do not set that variable for normal checks.
+`cargo test` uses a fake power controller. It does not sleep, shut down, or restart the machine. Ignored tests call a real power API only when `--ignored` is passed and the matching variable is `1`: `ALLOW_REAL_SLEEP_TEST`, `ALLOW_REAL_SHUTDOWN_TEST`, or `ALLOW_REAL_REBOOT_TEST`. Do not set those variables for normal checks. Do not run the shut-down or restart tests.
 
 `pnpm check` includes a Playwright test that loads the built extension and reads the popup. Branded Google Chrome ignores `--load-extension`, so that test uses Playwright's Chromium. It does not install the native host and does not claim a native-messaging round trip. Use **Test connection** in your own Chrome profile for that.
 

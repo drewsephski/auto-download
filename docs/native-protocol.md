@@ -12,7 +12,7 @@ Responses always use `"protocolVersion": 2`, including errors. A request whose n
 
 Unknown JSON fields are rejected. The browser cannot add a command, shell string, executable path, script, or argument list.
 
-One-shot messages (`runtime.sendNativeMessage`) are `ping`, `get_capabilities`, `request_permission`, and dry-run `execute_action`. A real sleep uses a long-lived port (`runtime.connectNative`) and the messages `schedule_action` and `cancel_action`. The host process exits when that port closes. It does not persist the countdown.
+One-shot messages (`runtime.sendNativeMessage`) are `ping`, `get_capabilities`, `request_permission`, and dry-run `execute_action`. A real sleep, shut down, or restart uses a long-lived port (`runtime.connectNative`) and the messages `schedule_action` and `cancel_action`. The host process exits when that port closes. It does not persist the countdown.
 
 ## `ping`
 
@@ -59,7 +59,7 @@ Success on macOS:
   "result": {
     "platform": "macos",
     "dryRunActions": ["sleep", "shutdown", "reboot"],
-    "realActions": ["sleep"],
+    "realActions": ["sleep", "shutdown", "reboot"],
     "countdown": {
       "required": true,
       "minimumSeconds": 10
@@ -68,7 +68,7 @@ Success on macOS:
 }
 ```
 
-Capabilities describe the host. They are not the security check. The request handler rejects real shut down, real restart, and any real sleep whose countdown is outside 10–120 seconds.
+Capabilities describe the host. They are not the security check. On macOS the handler accepts real sleep, shut down, and restart. It rejects unknown actions, one-shot real execution, and any countdown outside 10–120 seconds. Non-macOS builds report an empty real-action list.
 
 ## `request_permission`
 
@@ -140,7 +140,7 @@ The other fixed messages are:
 
 ## `schedule_action`
 
-Real sleep on an open native port. The host allows one pending sleep per session. A second schedule while one is pending returns `coalesced` and does not start another timer.
+Real sleep, shut down, or restart on an open native port. The host allows one pending action per session. A second schedule while one is pending returns `coalesced` with the original action id, action, and countdown. It does not start another timer, extend the deadline, or switch to a different action.
 
 ```json
 {
@@ -177,7 +177,7 @@ Scheduled:
 }
 ```
 
-When the deadline passes and the port is still writable, the host sends `executing`, calls `system_shutdown::sleep()` once, then sends `executed` or `failed`. `failed` is not retried. If stdin closes first, the pending sleep is dropped and the process exits without calling sleep.
+When the deadline passes and the port is still writable, the host sends `executing`, calls the matching non-force `system_shutdown` function once, then sends `executed` or `failed`. `failed` is not retried. If stdin closes first, the pending action is dropped and the process exits without calling the operating system.
 
 ## `cancel_action`
 
@@ -190,7 +190,7 @@ When the deadline passes and the port is still writable, the host sends `executi
 }
 ```
 
-Success uses `"status": "cancelled"`. A cancel for an id that is not pending returns `unknown_action_id` and leaves a different pending sleep alone.
+Success uses `"status": "cancelled"`. A cancel for an id that is not pending returns `unknown_action_id` and leaves the pending action alone.
 
 ## Errors
 
@@ -216,7 +216,7 @@ Success uses `"status": "cancelled"`. A cancel for an id that is not pending ret
 | `real_action_not_enabled` | Real execution was requested for anything other than scheduled sleep |
 | `invalid_countdown` | The countdown is missing, not an integer, or outside 10–120 seconds |
 | `invalid_action_id` | `actionId` is missing or not a token |
-| `unknown_action_id` | Cancel did not match the pending sleep |
+| `unknown_action_id` | Cancel did not match the pending action |
 | `permission_denied` | System Events did not allow the permission request |
 | `permission_unavailable` | This operating system cannot show that permission request |
 

@@ -81,13 +81,30 @@ describe("completed download automation", () => {
     expect(harness.executions[0]).toMatchObject({ status: "scheduled", executed: false });
   });
 
-  test("does not schedule real shutdown", async () => {
+  test("schedules real shut down and restart when the helper allows them", async () => {
+    for (const action of ["shutdown", "reboot"] as const) {
+      const settings = withRuleEnabled(createDefaultSettings(), true);
+      settings.rules[0] = { ...settings.rules[0]!, action, executionMode: "real" };
+      const harness = createHarness({
+        settings,
+        permissionGranted: true,
+        notificationsGranted: true,
+      });
+      await processCompletedDownload(harness.deps, 3);
+      expect(harness.scheduled).toHaveLength(1);
+      expect(harness.scheduled[0]).toMatchObject({ action, executionMode: "real" });
+      expect(harness.pending?.action).toBe(action);
+    }
+  });
+
+  test("does not schedule a real action the helper omitted", async () => {
     const settings = withRuleEnabled(createDefaultSettings(), true);
-    settings.rules[0] = { ...settings.rules[0]!, action: "shutdown", executionMode: "real" };
+    settings.rules[0] = { ...settings.rules[0]!, action: "reboot", executionMode: "real" };
     const harness = createHarness({
       settings,
       permissionGranted: true,
       notificationsGranted: true,
+      realActions: ["sleep"],
     });
     await processCompletedDownload(harness.deps, 3);
     expect(harness.scheduled).toHaveLength(0);
@@ -107,7 +124,12 @@ describe("completed download automation", () => {
     await processCompletedDownload(harness.deps, 4);
     expect(harness.scheduled).toHaveLength(1);
     expect(harness.downloads).toHaveLength(2);
-    expect(harness.executions[0]).toMatchObject({ status: "coalesced" });
+    settings.rules[0] = { ...settings.rules[0]!, action: "reboot", executionMode: "real" };
+    await processCompletedDownload(harness.deps, 5);
+    expect(harness.scheduled).toHaveLength(1);
+    expect(harness.downloads).toHaveLength(3);
+    expect(harness.executions[0]).toMatchObject({ status: "coalesced", action: "sleep" });
+    expect(harness.pending?.action).toBe("sleep");
   });
 
   test("cancels a scheduled sleep when the notification cannot be shown", async () => {
@@ -152,6 +174,7 @@ function createHarness(options: {
   notificationsGranted?: boolean;
   notificationShown?: boolean;
   liveSession?: boolean;
+  realActions?: Array<"sleep" | "shutdown" | "reboot">;
 }) {
   const sent: OneShotRequest[] = [];
   const scheduled: ScheduleActionRequest[] = [];
@@ -210,6 +233,9 @@ function createHarness(options: {
     async notificationsGranted() {
       return options.notificationsGranted ?? false;
     },
+    async realActions() {
+      return options.realActions ?? ["sleep", "shutdown", "reboot"];
+    },
     hasLiveSession() {
       return (options.liveSession ?? false) || pending?.status === "scheduled";
     },
@@ -250,7 +276,7 @@ function createHarness(options: {
         result: {
           status: "scheduled",
           actionId: request.actionId,
-          action: "sleep",
+          action: request.action,
           executionMode: "real",
           countdownSeconds: 30,
         },
@@ -271,7 +297,7 @@ function createHarness(options: {
         },
       };
     },
-    async showSleepNotification(actionId) {
+    async showNotification(_action, actionId) {
       notifications.push(actionId);
       return options.notificationShown ?? true;
     },

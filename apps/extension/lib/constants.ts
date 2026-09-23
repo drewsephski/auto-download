@@ -15,11 +15,7 @@ export const COUNTDOWN_SECONDS = 30;
 
 export const EXTENSION_PERMISSIONS = ["storage", "downloads", "nativeMessaging", "notifications"] as const;
 
-export const CANCEL_PENDING_MESSAGE = "cancel-pending-sleep";
-
-export const NOTIFICATION_TITLE = "Download finished";
-
-export const NOTIFICATION_MESSAGE = "This Mac will sleep in 30 seconds.";
+export const CANCEL_PENDING_MESSAGE = "cancel-pending-action";
 
 export const DRY_RUN_MESSAGES = {
   sleep: "Would put this computer to sleep",

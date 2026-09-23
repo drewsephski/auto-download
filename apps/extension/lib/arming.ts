@@ -1,4 +1,5 @@
-import { withDryRun, type AutomationRule, type Settings } from "./settings";
+import { actionPhrase, confirmationCopy, liveDetail, liveLabel } from "./action-copy";
+import { withDryRun, type AutomationRule, type PowerAction, type Settings } from "./settings";
 
 export type ArmBlock =
   | "confirmation_required"
@@ -7,42 +8,32 @@ export type ArmBlock =
   | "action_not_enabled"
   | "helper_not_ready";
 
-export interface RealSleepGates {
+export interface RealActionGates {
   permissionGranted: boolean;
   notificationsGranted: boolean;
-  realSleepSupported: boolean;
+  realActions: readonly PowerAction[];
   confirmed: boolean;
 }
 
-export type RealSleepDecision =
+export type RealActionDecision =
   | { ok: true; settings: Settings }
   | { ok: false; reason: ArmBlock; message: string };
 
-const ARM_MESSAGES: Record<Exclude<ArmBlock, "confirmation_required">, string> = {
-  permission_required: "Allow macOS control before real sleep can be enabled.",
-  notifications_required: "Turn on Chrome notifications so you can cancel sleep. Dry run still works.",
-  action_not_enabled: "Real shut down and restart are not enabled yet.",
-  helper_not_ready: "Real sleep needs a connected helper that allows it.",
-};
-
-export function prepareRealSleep(settings: Settings, rule: AutomationRule, gates: RealSleepGates): RealSleepDecision {
-  if (rule.action !== "sleep") {
-    return blocked("action_not_enabled");
-  }
-  if (!gates.realSleepSupported) {
-    return blocked("helper_not_ready");
+export function prepareRealAction(settings: Settings, rule: AutomationRule, gates: RealActionGates): RealActionDecision {
+  if (!gates.realActions.includes(rule.action)) {
+    return blocked(rule.action, gates.realActions.length === 0 ? "helper_not_ready" : "action_not_enabled");
   }
   if (!gates.permissionGranted) {
-    return blocked("permission_required");
+    return blocked(rule.action, "permission_required");
   }
   if (!gates.notificationsGranted) {
-    return blocked("notifications_required");
+    return blocked(rule.action, "notifications_required");
   }
   if (!gates.confirmed) {
     return {
       ok: false,
       reason: "confirmation_required",
-      message: "Confirm real sleep before it can be enabled.",
+      message: `Confirm real ${actionPhrase(rule.action)} before it can be enabled.`,
     };
   }
 
@@ -56,7 +47,7 @@ export function prepareRealSleep(settings: Settings, rule: AutomationRule, gates
         }
         return {
           ...candidate,
-          action: "sleep",
+          action: rule.action,
           executionMode: "real",
           countdownSeconds: 30,
         };
@@ -66,13 +57,11 @@ export function prepareRealSleep(settings: Settings, rule: AutomationRule, gates
 }
 
 export function modePresentation(rule: AutomationRule): { live: boolean; label: string; detail: string } {
-  if (rule.executionMode === "real" && rule.action === "sleep") {
+  if (rule.executionMode === "real") {
     return {
       live: true,
-      label: "LIVE — SLEEP ENABLED",
-      detail: rule.enabled
-        ? "After a download finishes, this Mac sleeps in 30 seconds unless you cancel."
-        : "Real sleep is armed. Turn on automation before a download can use it.",
+      label: liveLabel(rule.action),
+      detail: liveDetail(rule.action, rule.enabled),
     };
   }
   return {
@@ -82,10 +71,28 @@ export function modePresentation(rule: AutomationRule): { live: boolean; label: 
   };
 }
 
+export function realConfirmation(action: PowerAction) {
+  return confirmationCopy(action);
+}
+
 export function keepDryRun(settings: Settings): Settings {
   return withDryRun(settings);
 }
 
-function blocked(reason: Exclude<ArmBlock, "confirmation_required">): RealSleepDecision {
-  return { ok: false, reason, message: ARM_MESSAGES[reason] };
+function blocked(action: PowerAction, reason: Exclude<ArmBlock, "confirmation_required">): RealActionDecision {
+  return { ok: false, reason, message: armMessage(action, reason) };
+}
+
+function armMessage(action: PowerAction, reason: Exclude<ArmBlock, "confirmation_required">): string {
+  const phrase = actionPhrase(action);
+  switch (reason) {
+    case "permission_required":
+      return `Allow macOS control before real ${phrase} can be enabled.`;
+    case "notifications_required":
+      return `Turn on Chrome notifications so you can cancel ${phrase}. Dry run still works.`;
+    case "action_not_enabled":
+      return `Real ${phrase} is not available from this helper.`;
+    case "helper_not_ready":
+      return `Real ${phrase} needs a connected helper that allows it.`;
+  }
 }

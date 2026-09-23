@@ -89,7 +89,24 @@ describe("settings", () => {
     expect(settings.rules[1]?.executionMode).toBe("dry_run");
   });
 
-  test("returns to dry run when the default action leaves sleep", () => {
+  test("keeps real shut down on the default rule", () => {
+    expect(
+      normalizeSettings({
+        version: 2,
+        rules: [
+          {
+            id: "after-download",
+            enabled: true,
+            action: "shutdown",
+            executionMode: "real",
+            countdownSeconds: 30,
+          },
+        ],
+      }).rules[0],
+    ).toMatchObject({ action: "shutdown", executionMode: "real" });
+  });
+
+  test("returns to dry run when the selected action changes", () => {
     const settings = normalizeSettings({
       version: 2,
       rules: [
@@ -105,6 +122,10 @@ describe("settings", () => {
     expect(withRuleAction(settings, "reboot").rules[0]).toMatchObject({
       action: "reboot",
       executionMode: "dry_run",
+    });
+    expect(withRuleAction(settings, "sleep").rules[0]).toMatchObject({
+      action: "sleep",
+      executionMode: "real",
     });
   });
 

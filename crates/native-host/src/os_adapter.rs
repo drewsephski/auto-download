@@ -1,9 +1,10 @@
 //! Operating-system adapter.
 //!
-//! Dry-run results never touch the operating system. Real sleep goes through
-//! [`PowerController`]. The production controller calls `system_shutdown::sleep`
-//! and nothing else. On macOS that crate uses a fixed System Events AppleScript.
-//! This module does not construct commands, paths, or scripts from browser input.
+//! Dry-run results never touch the operating system. Real actions go through
+//! [`PowerController`]. The production controller calls the non-force
+//! `system_shutdown` sleep, shutdown, and reboot functions and nothing else.
+//! On macOS that crate uses a fixed System Events AppleScript. This module does
+//! not construct commands, paths, or scripts from browser input.
 
 use thiserror::Error;
 
@@ -68,19 +69,62 @@ pub fn simulate(action: PowerAction) -> SimulatedAction {
 pub enum PowerError {
     #[error("sleep failed")]
     SleepFailed,
+    #[error("shutdown failed")]
+    ShutdownFailed,
+    #[error("reboot failed")]
+    RebootFailed,
 }
 
-/// Boundary used by the session so tests can supply a fake sleeper.
+impl PowerError {
+    pub fn for_action(action: PowerAction) -> Self {
+        match action {
+            PowerAction::Sleep => Self::SleepFailed,
+            PowerAction::Shutdown => Self::ShutdownFailed,
+            PowerAction::Reboot => Self::RebootFailed,
+        }
+    }
+}
+
+pub fn executing_message(action: PowerAction) -> &'static str {
+    match action {
+        PowerAction::Sleep => "Putting this computer to sleep",
+        PowerAction::Shutdown => "Shutting down this computer",
+        PowerAction::Reboot => "Restarting this computer",
+    }
+}
+
+pub fn executed_message(action: PowerAction) -> &'static str {
+    match action {
+        PowerAction::Sleep => "Put this computer to sleep",
+        PowerAction::Shutdown => "Shut down this computer",
+        PowerAction::Reboot => "Restarted this computer",
+    }
+}
+
+pub fn failed_message(action: PowerAction) -> &'static str {
+    match action {
+        PowerAction::Sleep => "The computer did not sleep.",
+        PowerAction::Shutdown => "The computer did not shut down.",
+        PowerAction::Reboot => "The computer did not restart.",
+    }
+}
+
+/// Boundary used by the session so tests can supply a fake controller.
 pub trait PowerController {
-    fn sleep(&mut self) -> Result<(), PowerError>;
+    fn execute(&mut self, action: PowerAction) -> Result<(), PowerError>;
 }
 
-/// Production sleeper. Calls the non-force sleep API and takes no browser input.
+/// Production controller. Calls one non-force API and takes no browser input.
 pub struct SystemPowerController;
 
 impl PowerController for SystemPowerController {
-    fn sleep(&mut self) -> Result<(), PowerError> {
-        system_shutdown::sleep().map_err(|_| PowerError::SleepFailed)
+    fn execute(&mut self, action: PowerAction) -> Result<(), PowerError> {
+        let result = match action {
+            PowerAction::Sleep => system_shutdown::sleep(),
+            PowerAction::Shutdown => system_shutdown::shutdown(),
+            PowerAction::Reboot => system_shutdown::reboot(),
+        };
+        result.map_err(|_| PowerError::for_action(action))
     }
 }
 
@@ -132,13 +176,17 @@ pub fn platform_name() -> &'static str {
     }
 }
 
-/// Real execution allowlist for this slice. Shutdown and reboot stay dry-run only.
+/// Real execution allowlist. Non-macOS builds stay dry-run only.
 pub fn real_action_names() -> &'static [&'static str] {
     if cfg!(target_os = "macos") {
-        &["sleep"]
+        &["sleep", "shutdown", "reboot"]
     } else {
         &[]
     }
+}
+
+pub fn is_real_action(action: PowerAction) -> bool {
+    real_action_names().contains(&action.as_str())
 }
 
 /// Test double. Ordinary `cargo test` uses this instead of [`SystemPowerController`].
@@ -149,7 +197,7 @@ pub struct FakePowerController {
 
 #[derive(Debug)]
 struct FakePowerState {
-    calls: u32,
+    actions: Vec<PowerAction>,
     fail: bool,
 }
 
@@ -164,21 +212,28 @@ impl FakePowerController {
 
     fn new(fail: bool) -> Self {
         Self {
-            calls: std::sync::Arc::new(std::sync::Mutex::new(FakePowerState { calls: 0, fail })),
+            calls: std::sync::Arc::new(std::sync::Mutex::new(FakePowerState {
+                actions: Vec::new(),
+                fail,
+            })),
         }
     }
 
     pub fn calls(&self) -> u32 {
-        self.calls.lock().expect("fake power lock").calls
+        self.actions().len() as u32
+    }
+
+    pub fn actions(&self) -> Vec<PowerAction> {
+        self.calls.lock().expect("fake power lock").actions.clone()
     }
 }
 
 impl PowerController for FakePowerController {
-    fn sleep(&mut self) -> Result<(), PowerError> {
+    fn execute(&mut self, action: PowerAction) -> Result<(), PowerError> {
         let mut state = self.calls.lock().expect("fake power lock");
-        state.calls += 1;
+        state.actions.push(action);
         if state.fail {
-            Err(PowerError::SleepFailed)
+            Err(PowerError::for_action(action))
         } else {
             Ok(())
         }
@@ -202,6 +257,22 @@ mod tests {
     use super::{simulate, FakePowerController, PowerAction, PowerController};
 
     #[test]
+    fn fake_controller_records_each_action_once() {
+        let mut controller = FakePowerController::succeeding();
+        controller.execute(PowerAction::Sleep).unwrap();
+        controller.execute(PowerAction::Shutdown).unwrap();
+        controller.execute(PowerAction::Reboot).unwrap();
+        assert_eq!(
+            controller.actions(),
+            vec![
+                PowerAction::Sleep,
+                PowerAction::Shutdown,
+                PowerAction::Reboot
+            ]
+        );
+    }
+
+    #[test]
     fn every_dry_run_action_is_simulated() {
         for action in [
             PowerAction::Sleep,
@@ -216,8 +287,8 @@ mod tests {
         }
     }
 
-    /// Opt-in only. `cargo test` does not run ignored tests, and this still
-    /// refuses to call the operating system unless `ALLOW_REAL_SLEEP_TEST=1`.
+    /// Opt-in only. `cargo test` does not run ignored tests, and each test
+    /// refuses to call the operating system unless its own variable is `1`.
     #[test]
     #[ignore = "puts this Mac to sleep; set ALLOW_REAL_SLEEP_TEST=1 and pass --ignored"]
     fn manual_real_sleep() {
@@ -230,20 +301,45 @@ mod tests {
     }
 
     #[test]
-    fn fake_controller_counts_one_failure_without_retrying_itself() {
-        let mut controller = FakePowerController::failing();
-        assert!(controller.sleep().is_err());
-        assert_eq!(controller.calls(), 1);
+    #[ignore = "shuts this Mac down; set ALLOW_REAL_SHUTDOWN_TEST=1 and pass --ignored"]
+    fn manual_real_shutdown() {
+        assert_eq!(
+            std::env::var("ALLOW_REAL_SHUTDOWN_TEST").ok().as_deref(),
+            Some("1"),
+            "refusing to shut down without ALLOW_REAL_SHUTDOWN_TEST=1"
+        );
+        system_shutdown::shutdown().expect("shutdown failed");
     }
 
     #[test]
-    fn production_adapter_mentions_only_non_force_sleep() {
+    #[ignore = "restarts this Mac; set ALLOW_REAL_REBOOT_TEST=1 and pass --ignored"]
+    fn manual_real_reboot() {
+        assert_eq!(
+            std::env::var("ALLOW_REAL_REBOOT_TEST").ok().as_deref(),
+            Some("1"),
+            "refusing to restart without ALLOW_REAL_REBOOT_TEST=1"
+        );
+        system_shutdown::reboot().expect("reboot failed");
+    }
+
+    #[test]
+    fn fake_controller_counts_one_failure_without_retrying_itself() {
+        let mut controller = FakePowerController::failing();
+        assert_eq!(
+            controller.execute(PowerAction::Shutdown),
+            Err(super::PowerError::ShutdownFailed)
+        );
+        assert_eq!(controller.actions(), vec![PowerAction::Shutdown]);
+    }
+
+    #[test]
+    fn production_adapter_uses_only_non_force_power_apis() {
         let source = include_str!("os_adapter.rs");
         assert!(source.contains("system_shutdown::sleep"));
+        assert!(source.contains(&["system_shutdown::", "shutdown"].concat()));
+        assert!(source.contains(&["system_shutdown::", "reboot"].concat()));
         assert!(source.contains("request_permission_dialog"));
         assert!(!source.contains(&["force_", "shutdown"].concat()));
         assert!(!source.contains(&["force_", "reboot"].concat()));
-        assert!(!source.contains(&["system_shutdown::", "shutdown"].concat()));
-        assert!(!source.contains(&["system_shutdown::", "reboot"].concat()));
     }
 }

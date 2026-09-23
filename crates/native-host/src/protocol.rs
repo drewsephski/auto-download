@@ -2,10 +2,10 @@
 //!
 //! Every request is validated here. Unknown fields are rejected so a caller cannot
 //! smuggle a command, path, script, or argument alongside an allowlisted message.
-//! Real shutdown and real reboot are rejected even when the rest of the message is valid.
+//! Real execution is limited to the host allowlist. One-shot requests cannot run it.
 
 use crate::os_adapter::{
-    platform_name, real_action_names, simulate, PowerAction, MAX_COUNTDOWN_SECONDS,
+    is_real_action, platform_name, real_action_names, simulate, PowerAction, MAX_COUNTDOWN_SECONDS,
     MIN_COUNTDOWN_SECONDS,
 };
 use crate::PROTOCOL_VERSION;
@@ -67,18 +67,19 @@ pub enum Intake {
     RequestPermission {
         request_id: String,
     },
-    Schedule(ScheduledSleep),
+    Schedule(ScheduledAction),
     Cancel {
         request_id: String,
         action_id: String,
     },
 }
 
-/// A real sleep request that has already passed validation.
+/// A real power request that has already passed validation.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ScheduledSleep {
+pub struct ScheduledAction {
     pub request_id: String,
     pub action_id: String,
+    pub action: PowerAction,
     pub countdown_seconds: u64,
     pub download_id: i64,
     pub filename: String,
@@ -220,7 +221,7 @@ fn handle_execute(request_id: &str, object: &Map<String, Value>) -> HostResponse
             return failure(
                 request_id,
                 "real_action_not_enabled",
-                "Real actions must be scheduled and are limited to sleep.",
+                "Real actions must be scheduled on a live connection.",
             );
         }
         Some(_) => {
@@ -300,11 +301,11 @@ fn handle_schedule_intake(request_id: &str, object: &Map<String, Value>) -> Inta
             "A scheduled action must use real execution mode.",
         ));
     }
-    if action != PowerAction::Sleep || !real_action_names().contains(&action.as_str()) {
+    if !is_real_action(action) {
         return Intake::Respond(failure(
             request_id,
             "real_action_not_enabled",
-            "Real execution is only enabled for sleep.",
+            "Real execution is not enabled for this action.",
         ));
     }
 
@@ -340,9 +341,10 @@ fn handle_schedule_intake(request_id: &str, object: &Map<String, Value>) -> Inta
         Err(response) => return Intake::Respond(response),
     };
 
-    Intake::Schedule(ScheduledSleep {
+    Intake::Schedule(ScheduledAction {
         request_id: request_id.to_string(),
         action_id: action_id.to_string(),
+        action,
         countdown_seconds,
         download_id: context.0,
         filename: context.1,
@@ -599,7 +601,7 @@ mod tests {
     }
 
     #[test]
-    fn capabilities_list_real_sleep_separately_from_dry_run() {
+    fn capabilities_list_real_actions_separately_from_dry_run() {
         let response = respond(&request(json!({
             "protocolVersion": 2,
             "requestId": "req-1",
@@ -650,24 +652,43 @@ mod tests {
     }
 
     #[test]
-    fn real_shutdown_and_reboot_are_rejected() {
-        for action in ["shutdown", "reboot"] {
-            let response = respond(&request(schedule(action, json!(30))));
-            assert_eq!(response.error.unwrap().code, "real_action_not_enabled");
+    fn real_power_actions_follow_the_host_allowlist() {
+        for action in ["sleep", "shutdown", "reboot"] {
+            let intake = interpret(&request(schedule(action, json!(30))));
+            if real_action_names().contains(&action) {
+                match intake {
+                    Intake::Schedule(scheduled) => {
+                        assert_eq!(scheduled.action.as_str(), action);
+                        assert_eq!(scheduled.action_id, "act-1");
+                        assert_eq!(scheduled.countdown_seconds, 30);
+                        assert_eq!(scheduled.download_id, 42);
+                        assert_eq!(scheduled.filename, "example.zip");
+                    }
+                    other => panic!("expected schedule for {action}, got {other:?}"),
+                }
+            } else {
+                match intake {
+                    Intake::Respond(response) => {
+                        assert_eq!(response.error.unwrap().code, "real_action_not_enabled");
+                    }
+                    other => panic!("expected rejection for {action}, got {other:?}"),
+                }
+            }
         }
     }
 
     #[test]
-    fn real_sleep_schedule_is_accepted_by_validation() {
-        let intake = interpret(&request(schedule("sleep", json!(30))));
-        match intake {
-            Intake::Schedule(scheduled) => {
-                assert_eq!(scheduled.action_id, "act-1");
-                assert_eq!(scheduled.countdown_seconds, 30);
-                assert_eq!(scheduled.filename, "example.zip");
-            }
-            other => panic!("expected schedule, got {other:?}"),
-        }
+    fn unknown_schedule_action_is_rejected() {
+        let response = respond(&request(schedule("hibernate", json!(30))));
+        assert_eq!(response.error.unwrap().code, "unknown_action");
+    }
+
+    #[test]
+    fn invalid_schedule_execution_mode_is_rejected() {
+        let mut payload = schedule("sleep", json!(30));
+        payload["executionMode"] = json!("dry_run");
+        let response = respond(&request(payload));
+        assert_eq!(response.error.unwrap().code, "malformed_request");
     }
 
     #[test]

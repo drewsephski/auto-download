@@ -2,7 +2,7 @@
 //!
 //! Chrome may send one message (`runtime.sendNativeMessage`) or several
 //! (`runtime.connectNative`). Stdout is reserved for framed responses. The process
-//! exits when browser input ends, and any pending sleep is discarded with it.
+//! exits when browser input ends, and any pending power action is discarded with it.
 
 use crate::os_adapter::{SystemPermissionRequester, SystemPowerController};
 use crate::protocol::{failure, HostResponse, MAX_REQUEST_BYTES};
@@ -93,7 +93,7 @@ async fn run_session() -> Result<(), HostIoError> {
                 if write_response(&notice).await.is_err() {
                     session.abort_execution(prepared);
                     session.on_disconnect();
-                    eprintln!("download-automations-host: connection lost before sleep");
+                    eprintln!("download-automations-host: connection lost before the power action");
                     break;
                 }
                 let finished = session.commit_execution(prepared);

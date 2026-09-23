@@ -32,6 +32,10 @@ fn exchange(payload: Value) -> (Value, String) {
 }
 
 fn exchange_all(payload: Value, timeout: Duration) -> (Vec<Value>, String) {
+    exchange_frames(vec![payload], timeout)
+}
+
+fn exchange_frames(payloads: Vec<Value>, timeout: Duration) -> (Vec<Value>, String) {
     let bin = env!("CARGO_BIN_EXE_native-host");
     let mut child = Command::new(bin)
         .arg("chrome-extension://abcdefghijklmnopabcdefghijklmnop/")
@@ -44,9 +48,11 @@ fn exchange_all(payload: Value, timeout: Duration) -> (Vec<Value>, String) {
     let mut stdin = child.stdin.take().unwrap();
     let mut stdout = child.stdout.take().unwrap();
     let mut stderr = child.stderr.take().unwrap();
-    stdin
-        .write_all(&frame(&serde_json::to_vec(&payload).unwrap()))
-        .unwrap();
+    for payload in payloads {
+        stdin
+            .write_all(&frame(&serde_json::to_vec(&payload).unwrap()))
+            .unwrap();
+    }
     drop(stdin);
 
     let stdout_thread = thread::spawn(move || {
@@ -129,15 +135,27 @@ fn dry_run_shutdown_returns_a_simulation() {
 }
 
 #[test]
-fn real_shutdown_returns_a_structured_error_frame() {
+fn capabilities_expose_the_three_real_actions() {
     let (response, _) = exchange(json!({
         "protocolVersion": 2,
-        "requestId": "stdio-real-shutdown",
-        "type": "schedule_action",
-        "actionId": "act-shutdown",
+        "requestId": "stdio-caps",
+        "type": "get_capabilities"
+    }));
+    assert_eq!(response["ok"], true);
+    assert_eq!(
+        response["result"]["realActions"],
+        json!(["sleep", "shutdown", "reboot"])
+    );
+}
+
+#[test]
+fn one_shot_real_shutdown_is_rejected() {
+    let (response, _) = exchange(json!({
+        "protocolVersion": 2,
+        "requestId": "stdio-oneshot",
+        "type": "execute_action",
         "action": "shutdown",
         "executionMode": "real",
-        "countdownSeconds": 30,
         "context": { "downloadId": 7, "filename": "notes.txt" }
     }));
     assert_eq!(response["ok"], false);
@@ -146,30 +164,67 @@ fn real_shutdown_returns_a_structured_error_frame() {
 }
 
 #[test]
-fn closing_stdin_during_a_real_sleep_countdown_exits_without_executing() {
-    let (frames, _) = exchange_all(
-        json!({
-            "protocolVersion": 2,
-            "requestId": "stdio-cancel-by-disconnect",
-            "type": "schedule_action",
-            "actionId": "act-sleep",
-            "action": "sleep",
-            "executionMode": "real",
-            "countdownSeconds": 30,
-            "context": { "downloadId": 7, "filename": "notes.txt" }
-        }),
-        Duration::from_secs(3),
-    );
-    assert_eq!(
-        frames.len(),
-        1,
-        "disconnect must not emit an execution frame"
-    );
-    assert_eq!(frames[0]["result"]["status"], "scheduled");
-    assert!(frames
-        .iter()
-        .all(|frame| frame["result"]["status"] != "executed"));
-    assert!(frames
-        .iter()
-        .all(|frame| frame["result"]["status"] != "executing"));
+fn cancel_before_disconnect_prevents_execution() {
+    for action in ["sleep", "shutdown", "reboot"] {
+        let (frames, _) = exchange_frames(
+            vec![
+                json!({
+                    "protocolVersion": 2,
+                    "requestId": format!("stdio-schedule-{action}"),
+                    "type": "schedule_action",
+                    "actionId": format!("act-{action}"),
+                    "action": action,
+                    "executionMode": "real",
+                    "countdownSeconds": 30,
+                    "context": { "downloadId": 7, "filename": "notes.txt" }
+                }),
+                json!({
+                    "protocolVersion": 2,
+                    "requestId": format!("stdio-cancel-{action}"),
+                    "type": "cancel_action",
+                    "actionId": format!("act-{action}")
+                }),
+            ],
+            Duration::from_secs(3),
+        );
+        assert_eq!(frames.len(), 2, "expected schedule and cancel for {action}");
+        assert_eq!(frames[0]["result"]["status"], "scheduled");
+        assert_eq!(frames[1]["result"]["status"], "cancelled");
+        assert_eq!(frames[1]["result"]["action"], action);
+        assert!(frames
+            .iter()
+            .all(|frame| frame["result"]["status"] != "executed"));
+    }
+}
+
+#[test]
+fn closing_stdin_during_a_real_countdown_exits_without_executing() {
+    for action in ["sleep", "shutdown", "reboot"] {
+        let (frames, _) = exchange_all(
+            json!({
+                "protocolVersion": 2,
+                "requestId": format!("stdio-cancel-{action}"),
+                "type": "schedule_action",
+                "actionId": format!("act-{action}"),
+                "action": action,
+                "executionMode": "real",
+                "countdownSeconds": 30,
+                "context": { "downloadId": 7, "filename": "notes.txt" }
+            }),
+            Duration::from_secs(3),
+        );
+        assert_eq!(
+            frames.len(),
+            1,
+            "disconnect must not emit an execution frame for {action}"
+        );
+        assert_eq!(frames[0]["result"]["status"], "scheduled");
+        assert_eq!(frames[0]["result"]["action"], action);
+        assert!(frames
+            .iter()
+            .all(|frame| frame["result"]["status"] != "executed"));
+        assert!(frames
+            .iter()
+            .all(|frame| frame["result"]["status"] != "executing"));
+    }
 }

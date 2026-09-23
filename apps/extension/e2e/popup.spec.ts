@@ -38,11 +38,38 @@ test("popup renders the dry-run utility", async () => {
     await expect(page.getByText("DRY RUN", { exact: true })).toBeVisible();
     await expect(page.getByRole("switch", { name: "Enable after-download automation" })).toBeVisible();
     await expect(page.getByRole("radio", { name: "Sleep" })).toBeVisible();
+    await expect(page.getByRole("radio", { name: "Shut down" })).toBeVisible();
+    await expect(page.getByRole("radio", { name: "Restart" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Test connection" })).toBeVisible();
+
+    await page.getByRole("radio", { name: "Shut down" }).click();
+    await page.getByRole("radio", { name: "Real" }).click();
+    await dismissRealConfirmation(page, "Enable real shut down");
+    await expect(page.getByText("DRY RUN", { exact: true })).toBeVisible();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+
+    await page.getByRole("radio", { name: "Restart" }).click();
+    await page.getByRole("radio", { name: "Real" }).click();
+    await dismissRealConfirmation(page, "Enable real restart");
+    await expect(page.getByText("DRY RUN", { exact: true })).toBeVisible();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
   } finally {
     await context.close();
   }
 });
+
+async function dismissRealConfirmation(
+  page: Awaited<ReturnType<Awaited<ReturnType<typeof chromium.launchPersistentContext>>["newPage"]>>,
+  confirmName: string,
+) {
+  const dialog = page.getByRole("dialog");
+  if ((await dialog.count()) > 0) {
+    await expect(dialog.getByRole("button", { name: confirmName })).toBeVisible();
+    await dialog.getByRole("button", { name: "Keep dry run" }).click();
+    return;
+  }
+  await expect(page.getByText(/needs a connected helper|Allow macOS control before|Turn on Chrome notifications/)).toBeVisible();
+}
 
 async function waitForExtensionWorker(context: Awaited<ReturnType<typeof chromium.launchPersistentContext>>) {
   const matches = () => context.serviceWorkers().find((worker) => worker.url().endsWith("/background.js"));

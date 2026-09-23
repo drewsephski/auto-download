@@ -1,11 +1,12 @@
 import { capabilitiesRequest, parseHostResponse, pingRequest, type OneShotRequest } from "./protocol";
 import { describeNativeFailure } from "./native-status";
+import type { PowerAction } from "./settings";
 
 export interface ConnectionStatus {
   state: "connected" | "not_installed" | "error";
   title: string;
   message: string;
-  realSleepSupported: boolean;
+  realActions: PowerAction[];
 }
 
 export async function checkConnection(
@@ -41,10 +42,11 @@ export async function checkConnection(
   return {
     state: "connected",
     title: "Connected",
-    message: capabilities.realSleepSupported
-      ? "The helper is connected. Real sleep can be armed after setup."
-      : "The helper is connected. Only dry-run actions are available.",
-    realSleepSupported: capabilities.realSleepSupported,
+    message:
+      capabilities.realActions.length > 0
+        ? "The helper is connected. Real actions can be armed after setup."
+        : "The helper is connected. Only dry-run actions are available.",
+    realActions: capabilities.realActions,
   };
 }
 
@@ -55,7 +57,7 @@ function fromFailure(error: unknown): ConnectionStatus {
       state: "not_installed",
       title: "Not installed",
       message: failure.message,
-      realSleepSupported: false,
+      realActions: [],
     };
   }
   return errorStatus(failure.message);
@@ -66,6 +68,6 @@ function errorStatus(message: string): ConnectionStatus {
     state: "error",
     title: "Error",
     message,
-    realSleepSupported: false,
+    realActions: [],
   };
 }

@@ -13,7 +13,7 @@ Chrome download event
   -> extension history and popup
 ```
 
-Dry-run sleep, shut down, and restart use one-shot `runtime.sendNativeMessage`. Real sleep uses `runtime.connectNative` and stays on that port until it is cancelled, the countdown finishes, or the connection closes.
+Dry-run sleep, shut down, and restart use one-shot `runtime.sendNativeMessage`. Real sleep, shut down, and restart use `runtime.connectNative` and stay on that port until the action is cancelled, the countdown finishes, or the connection closes.
 
 ## Chrome download event
 
@@ -31,9 +31,9 @@ A completion is claimed in storage before the host is contacted, under a Web Loc
 
 A second completed download while a sleep is already pending is recorded, then coalesced. It does not start another countdown. The computer only needs to sleep once.
 
-## Real sleep lifecycle
+## Real power lifecycle
 
-Real sleep is at most once per scheduled action:
+Real sleep, shut down, and restart are at most once per scheduled action:
 
 ```text
 scheduled -> executing -> executed
@@ -46,15 +46,15 @@ The Rust process owns the deadline. The extension does not use `chrome.alarms` f
 
 A live power action exists only while Chrome maintains an active Native Messaging session. If Chrome or the connection disappears before the deadline, the action is cancelled. There is no detached process, LaunchAgent, cron job, daemon, or recovery execution after Chrome restarts.
 
-Before `system_shutdown::sleep()`, the host checks that the pending action is still the same sleep, that the countdown has elapsed, and that it can still write to the browser. A failed sleep is recorded and not retried. Automated tests use a fake power controller. `cargo test` does not call the real sleep function.
+Before `system_shutdown::sleep()`, `shutdown()`, or `reboot()`, the host checks that the pending action is still the same one, that the countdown has elapsed, and that it can still write to the browser. A failure is recorded and not retried, and it is never replaced with a different power action. Automated tests use a fake power controller. `cargo test` does not call the real power functions.
 
 ## Native Messaging
 
-Short requests use one-shot `runtime.sendNativeMessage`: ping, capabilities, dry-run actions, and the explicit macOS permission request. Real sleep uses `runtime.connectNative` so the same process can accept `schedule_action` and `cancel_action` for the life of the countdown.
+Short requests use one-shot `runtime.sendNativeMessage`: ping, capabilities, dry-run actions, and the explicit macOS permission request. Every real power action uses `runtime.connectNative` so the same process can accept `schedule_action` and `cancel_action` for the life of the countdown. A second download does not start another timer or change the pending action.
 
 The host name is `dev.downloadautomations.host` in both `apps/extension/lib/constants.ts` and `crates/native-host/src/lib.rs`.
 
-Stdout is reserved for framed responses. Diagnostics go to stderr. A browser disconnect is a normal exit and discards any pending sleep.
+Stdout is reserved for framed responses. Diagnostics go to stderr. A browser disconnect is a normal exit and discards any pending power action. A real power action exists only while Chrome maintains the active Native Messaging session. If that connection disappears before execution, the action is discarded.
 
 ## Rust host
 
@@ -64,7 +64,7 @@ Download Automations does not accept or construct arbitrary shell commands or ex
 
 ## macOS permission
 
-Real sleep needs Automation access to System Events. The popup button **Allow macOS control** sends `request_permission`. That calls `request_permission_dialog()`, which asks System Events to stop the current screen saver. The extension stores `granted` only when that call succeeds. A download completion never opens the permission dialog. Dry-run mode does not require it. Real mode cannot be armed until permission is granted and notifications are available.
+Real sleep, shut down, and restart need Automation access to System Events. The popup button **Allow macOS control** sends `request_permission`. That calls `request_permission_dialog()`, which asks System Events to stop the current screen saver. The extension stores `granted` only when that call succeeds. A download completion never opens the permission dialog. Dry-run mode does not require it. Real mode cannot be armed until permission is granted and notifications are available. Changing the selected action drops Real back to Dry Run until that action is confirmed on its own.
 
 ## Registration
 
@@ -80,4 +80,4 @@ There is no published extension ID yet. The allowlist is the unpacked or store I
 
 ## Popup
 
-The popup reads the same storage items the worker writes. It pings the host and then asks for capabilities. The connection is shown as Connected when protocol version 2 answers. A missing host is Not installed. A version 1 host is an error asking for an update. The banner says **DRY RUN** or **LIVE — SLEEP ENABLED**. Real mode requires a confirmation that names the 30-second cancel window and explains that closing Chrome cancels the pending sleep.
+The popup reads the same storage items the worker writes. It pings the host and then asks for capabilities. The connection is shown as Connected when protocol version 2 answers. A missing host is Not installed. A version 1 host is an error asking for an update. The banner says **DRY RUN**, or **LIVE — SLEEP ENABLED**, **LIVE — SHUT DOWN ENABLED**, or **LIVE — RESTART ENABLED**. Real mode requires a confirmation that names the 30-second cancel window and explains that closing Chrome cancels the pending action. Shut down and restart also warn that unsaved work in other applications can be lost.

@@ -1,5 +1,6 @@
 import { Download } from "lucide-react";
-import { modePresentation } from "../../lib/arming";
+import { pendingCopy } from "../../lib/action-copy";
+import { modePresentation, realConfirmation } from "../../lib/arming";
 import { NATIVE_HOST_NAME } from "../../lib/constants";
 import { formatFileSize } from "../../lib/format";
 import { permissionLabel } from "../../lib/permission";
@@ -29,8 +30,9 @@ export function App() {
   const statusState = model.connection.phase === "checking" ? "checking" : model.connection.status.state;
   const showSetup = model.setupOpen || statusState === "not_installed";
   const installCommand = `cargo run -p native-host -- install \\\n  --browser chrome \\\n  --extension-id ${model.extensionId}`;
-  const realActionBlocked = model.rule.action !== "sleep";
   const pending = isActivePending(model.pending) && model.pending.status === "scheduled" ? model.pending : null;
+  const pendingText = pending ? pendingCopy(pending.action) : null;
+  const confirmation = realConfirmation(model.rule.action);
 
   return (
     <main className="flex flex-col gap-3 p-4">
@@ -70,13 +72,13 @@ export function App() {
 
       {pending ? (
         <section aria-live="polite" className="rounded-lg border border-sky-400/40 bg-sky-400/10 px-3 py-2">
-          <h2 className="text-sm font-medium text-sky-50">Sleep pending</h2>
+          <h2 className="text-sm font-medium text-sky-50">{pendingText?.title}</h2>
           <p className="mt-1 truncate text-sm text-zinc-100" title={pending.filename}>
             {pending.filename}
           </p>
-          <p className="text-xs leading-5 text-zinc-300">Sleeping in ~30 seconds</p>
-          <Button className="mt-2" onClick={() => void model.handleCancelSleep()} type="button" variant="secondary">
-            Cancel sleep
+          <p className="text-xs leading-5 text-zinc-300">{pendingText?.countdown}</p>
+          <Button className="mt-2" onClick={() => void model.handleCancelPending()} type="button" variant="secondary">
+            {pendingText?.cancel}
           </Button>
         </section>
       ) : null}
@@ -150,22 +152,21 @@ export function App() {
             );
           })}
         </div>
-        {realActionBlocked ? (
-          <p className="mt-2 text-xs leading-5 text-zinc-400">Real shut down and restart are not enabled yet.</p>
-        ) : null}
       </fieldset>
 
       {model.confirmingReal ? (
-        <section aria-labelledby="real-sleep-title" className="rounded-lg border border-sky-400/40 bg-zinc-900 px-3 py-2" role="dialog">
-          <h2 className="text-sm font-medium text-zinc-50" id="real-sleep-title">
-            Enable real sleep
+        <section aria-labelledby="real-action-title" className="rounded-lg border border-sky-400/40 bg-zinc-900 px-3 py-2" role="dialog">
+          <h2 className="text-sm font-medium text-zinc-50" id="real-action-title">
+            {confirmation.title}
           </h2>
-          <p className="mt-1 text-sm leading-5 text-zinc-300">After a download finishes, this Mac can sleep automatically.</p>
-          <p className="text-sm leading-5 text-zinc-300">There is a 30-second cancellation period.</p>
-          <p className="text-sm leading-5 text-zinc-300">Closing Chrome or losing the helper connection cancels the pending sleep.</p>
+          {confirmation.paragraphs.map((paragraph) => (
+            <p className="mt-1 text-sm leading-5 text-zinc-300" key={paragraph}>
+              {paragraph}
+            </p>
+          ))}
           <div className="mt-2 flex items-center gap-2">
-            <Button disabled={model.saving} onClick={() => void model.handleConfirmRealSleep()} type="button">
-              Enable real sleep
+            <Button disabled={model.saving} onClick={() => void model.handleConfirmRealAction()} type="button">
+              {confirmation.confirm}
             </Button>
             <Button onClick={model.handleKeepDryRun} type="button" variant="ghost">
               Keep dry run

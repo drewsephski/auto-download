@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { browser } from "wxt/browser";
-import { keepDryRun, prepareRealSleep, type RealSleepDecision } from "../../lib/arming";
+import { keepDryRun, prepareRealAction, type RealActionDecision } from "../../lib/arming";
 import { CANCEL_PENDING_MESSAGE } from "../../lib/constants";
 import { checkConnection, type ConnectionStatus } from "../../lib/connection";
 import type { DownloadCompletedEvent } from "../../lib/download-event";
@@ -117,7 +117,7 @@ export function usePopupModel() {
       await saveSettings((current) => keepDryRun(current));
       return;
     }
-    if (defaultRule(settings).executionMode === "real" && defaultRule(settings).action === "sleep") {
+    if (defaultRule(settings).executionMode === "real") {
       return;
     }
     const decision = decideReal(false);
@@ -132,7 +132,7 @@ export function usePopupModel() {
     }
   }
 
-  async function handleConfirmRealSleep() {
+  async function handleConfirmRealAction() {
     const decision = decideReal(true);
     if (!decision.ok) {
       setNotice(decision.message);
@@ -168,12 +168,12 @@ export function usePopupModel() {
     }
   }
 
-  async function handleCancelSleep() {
+  async function handleCancelPending() {
     try {
       await browser.runtime.sendMessage({ type: CANCEL_PENDING_MESSAGE });
       setNotice(null);
     } catch {
-      setNotice("Could not cancel the pending sleep. Closing this browser also cancels it.");
+      setNotice("Could not cancel the pending action. Closing this browser also cancels it.");
     }
   }
 
@@ -194,13 +194,13 @@ export function usePopupModel() {
     setSetupOpen((open) => !open);
   }
 
-  function decideReal(confirmed: boolean): RealSleepDecision {
+  function decideReal(confirmed: boolean): RealActionDecision {
     const current = normalizeSettings(settings);
     const rule = defaultRule(current);
-    return prepareRealSleep(current, rule, {
+    return prepareRealAction(current, rule, {
       permissionGranted: permission.state === "granted",
       notificationsGranted: notificationsAvailable,
-      realSleepSupported: connection.phase === "ready" && connection.status.realSleepSupported,
+      realActions: connection.phase === "ready" ? connection.status.realActions : [],
       confirmed,
     });
   }
@@ -224,10 +224,10 @@ export function usePopupModel() {
     handleEnabledChange,
     handleActionChange,
     handleModeChange,
-    handleConfirmRealSleep,
+    handleConfirmRealAction,
     handleKeepDryRun,
     handleRequestPermission,
-    handleCancelSleep,
+    handleCancelPending,
     handleToggleSetup,
   };
 }

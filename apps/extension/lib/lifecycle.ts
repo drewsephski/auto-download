@@ -1,13 +1,14 @@
+import { cancelledMessage, failureCode, interruptedMessage } from "./action-copy";
 import { DEFAULT_RULE_ID } from "./constants";
 import { applyTerminalStatus, type PendingAction, type PendingStatus } from "./pending";
 import type { ExecutionRecord } from "./records";
 
 export function describeInterruptedPending(pending: PendingAction): ExecutionRecord {
-  return executionFromPending(pending, "connection_lost", false, "The sleep was cancelled because the helper connection closed.", "connection_lost");
+  return executionFromPending(pending, "connection_lost", false, interruptedMessage(pending.action), "connection_lost");
 }
 
 export function describeCancelledPending(pending: PendingAction): ExecutionRecord {
-  return executionFromPending(pending, "cancelled", false, "The pending sleep was cancelled.", undefined);
+  return executionFromPending(pending, "cancelled", false, cancelledMessage(pending.action), undefined);
 }
 
 export function describeLifecycle(pending: PendingAction, status: Extract<PendingStatus, "executing" | "executed" | "failed">, message: string): {
@@ -18,7 +19,7 @@ export function describeLifecycle(pending: PendingAction, status: Extract<Pendin
   const executed = status === "executed";
   return {
     pending: next,
-    record: executionFromPending(next, status, executed, message, status === "failed" ? "sleep_failed" : undefined),
+    record: executionFromPending(next, status, executed, message, status === "failed" ? failureCode(pending.action) : undefined),
   };
 }
 
@@ -35,7 +36,7 @@ function executionFromPending(
     ruleId: DEFAULT_RULE_ID,
     downloadId: pending.downloadId,
     filename: pending.filename,
-    action: "sleep",
+    action: pending.action,
     createdAt: pending.scheduledAt,
     ok: status === "executed" || status === "executing" || status === "cancelled",
     message,

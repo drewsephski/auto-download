@@ -1,6 +1,6 @@
 # Download Automations
 
-Download Automations is a Manifest V3 Chrome extension that can react when a browser download finishes. A completed download can ask a local Rust host to simulate sleep, shut down, or restart. Real execution is limited to sleep, and only after a 30-second countdown that the user can cancel.
+Download Automations is a Manifest V3 Chrome extension that can react when a browser download finishes. A completed download can ask a local Rust host to sleep, shut down, or restart this Mac. Each real action waits through a 30-second countdown that the user can cancel.
 
 Chrome talks to the host only through [Native Messaging](https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging). There is no local HTTP server, daemon, or scheduled job.
 
@@ -39,8 +39,8 @@ The exact macOS sequence is in [docs/local-development.md](docs/local-developmen
 
 ## Safety boundary
 
-Download Automations does not accept or construct arbitrary shell commands, scripts, paths, or executable arguments. The host accepts `ping`, `get_capabilities`, `request_permission`, `execute_action`, `schedule_action`, and `cancel_action`. Dry-run actions are `sleep`, `shutdown`, and `reboot`. The only real action is `sleep`, and it runs only while Chrome keeps the native messaging port open through a countdown of at least 10 seconds. This extension always requests 30 seconds.
+Download Automations does not accept or construct arbitrary shell commands, scripts, paths, or executable arguments. The host accepts `ping`, `get_capabilities`, `request_permission`, `execute_action`, `schedule_action`, and `cancel_action`. Dry-run and, on macOS, real actions are `sleep`, `shutdown`, and `reboot`. A real action runs only while Chrome keeps the native messaging port open through a countdown of at least 10 seconds. This extension always requests 30 seconds.
 
-On macOS, the audited `system_shutdown` dependency invokes fixed System Events AppleScript operations. Closing Chrome, disconnecting the port, or pressing Cancel discards a pending sleep. The host does not retry a failed sleep.
+On macOS, the audited `system_shutdown` dependency invokes fixed System Events AppleScript operations. Closing Chrome, disconnecting the port, or pressing Cancel discards the pending action. The host does not retry a failed sleep, shut down, or restart. Real shut down and restart can close other applications and lose unsaved work.
 
 Permissions are `storage`, `downloads`, `nativeMessaging`, and `notifications`. There are no host permissions and no content scripts.

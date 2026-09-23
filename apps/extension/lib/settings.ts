@@ -97,8 +97,7 @@ export function withRuleEnabled(settings: Settings, enabled: boolean): Settings 
 
 export function withRuleAction(settings: Settings, action: PowerAction): Settings {
   const current = defaultRule(settings);
-  const executionMode: ExecutionMode =
-    action === "sleep" && current.executionMode === "real" ? "real" : "dry_run";
+  const executionMode: ExecutionMode = action === current.action ? current.executionMode : "dry_run";
   return updateDefaultRule(settings, { action, executionMode });
 }
 

@@ -18,27 +18,30 @@ describe("protocol validation", () => {
     });
   });
 
-  test("builds a real sleep schedule and cannot express real shutdown", () => {
-    expect(
-      scheduleActionRequest({
-        requestId: "req-1",
-        actionId: "act-1",
-        downloadId: 12,
-        filename: "example.zip",
-      }),
-    ).toMatchObject({
-      type: "schedule_action",
-      action: "sleep",
-      executionMode: "real",
-      countdownSeconds: 30,
-    });
+  test("builds a real schedule for every allowlisted action", () => {
+    for (const action of ["sleep", "shutdown", "reboot"] as const) {
+      expect(
+        scheduleActionRequest({
+          requestId: "req-1",
+          actionId: "act-1",
+          action,
+          downloadId: 12,
+          filename: "example.zip",
+        }),
+      ).toMatchObject({
+        type: "schedule_action",
+        action,
+        executionMode: "real",
+        countdownSeconds: 30,
+      });
+    }
     expect(
       nativeRequestSchema.safeParse({
         protocolVersion: 2,
         requestId: "req-1",
         type: "schedule_action",
         actionId: "act-1",
-        action: "shutdown",
+        action: "hibernate",
         executionMode: "real",
         countdownSeconds: 30,
         context: { downloadId: 1, filename: "example.zip" },

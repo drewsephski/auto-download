@@ -15,6 +15,15 @@ const event: DownloadCompletedEvent = {
 const closed: PlanGates = {
   permissionGranted: false,
   notificationsGranted: false,
+  realActions: [],
+  hasLiveSession: false,
+  pending: null,
+};
+
+const open: PlanGates = {
+  permissionGranted: true,
+  notificationsGranted: true,
+  realActions: ["sleep", "shutdown", "reboot"],
   hasLiveSession: false,
   pending: null,
 };
@@ -58,64 +67,63 @@ describe("automation decisions", () => {
     }
   });
 
-  test("plans real sleep when the rule is armed and prerequisites are met", () => {
-    const plans = planAutomations(realSleep(), event, () => "req-1", () => "act-1", {
-      ...closed,
-      permissionGranted: true,
-      notificationsGranted: true,
-    });
-    expect(plans).toEqual([
-      expect.objectContaining({
-        kind: "real_sleep",
-        request: expect.objectContaining({
-          type: "schedule_action",
-          action: "sleep",
-          executionMode: "real",
-          countdownSeconds: 30,
-          actionId: "act-1",
+  test("plans each armed real action when the helper allows it", () => {
+    for (const action of ["sleep", "shutdown", "reboot"] as const) {
+      const plans = planAutomations(armed(action), event, () => "req-1", () => "act-1", open);
+      expect(plans).toEqual([
+        expect.objectContaining({
+          kind: "real_action",
+          action,
+          request: expect.objectContaining({
+            type: "schedule_action",
+            action,
+            executionMode: "real",
+            countdownSeconds: 30,
+            actionId: "act-1",
+          }),
         }),
-      }),
-    ]);
+      ]);
+    }
   });
 
-  test("rejects real shut down and restart without contacting a schedule", () => {
-    const shutdown = withRuleEnabled(withRuleAction(createDefaultSettings(), "shutdown"), true);
-    shutdown.rules[0] = { ...shutdown.rules[0]!, executionMode: "real" };
-    const plans = planAutomations(shutdown, event, () => "req-1", () => "act-1", {
-      ...closed,
-      permissionGranted: true,
-      notificationsGranted: true,
+  test("rejects a real action the helper did not advertise", () => {
+    const plans = planAutomations(armed("shutdown"), event, () => "req-1", () => "act-1", {
+      ...open,
+      realActions: ["sleep"],
     });
     expect(plans).toEqual([
       expect.objectContaining({ kind: "rejected", action: "shutdown", code: "real_action_not_enabled" }),
     ]);
   });
 
-  test("coalesces a second download while sleep is already pending", () => {
-    const plans = planAutomations(realSleep(), event, () => "req-2", () => "act-2", {
-      permissionGranted: true,
-      notificationsGranted: true,
+  test("coalesces onto the original pending action without replacing it", () => {
+    const plans = planAutomations(armed("reboot"), event, () => "req-2", () => "act-2", {
+      ...open,
       hasLiveSession: true,
       pending: createPendingAction({
         actionId: "act-1",
         requestId: "req-1",
+        action: "shutdown",
         downloadId: 3,
         filename: "first.zip",
         scheduledAt: 1,
         countdownSeconds: 30,
       }),
     });
-    expect(plans).toEqual([expect.objectContaining({ kind: "coalesced", actionId: "act-1" })]);
+    expect(plans).toEqual([expect.objectContaining({ kind: "coalesced", action: "shutdown", actionId: "act-1" })]);
   });
 
-  test("does not schedule real sleep when permission or notifications are missing", () => {
-    const plans = planAutomations(realSleep(), event, () => "req-1", () => "act-1", closed);
+  test("does not schedule a real action when permission or notifications are missing", () => {
+    const plans = planAutomations(armed("sleep"), event, () => "req-1", () => "act-1", {
+      ...closed,
+      realActions: ["sleep", "shutdown", "reboot"],
+    });
     expect(plans[0]).toMatchObject({ kind: "rejected", code: "prerequisites_missing" });
   });
 });
 
-function realSleep(): Settings {
-  const settings = withRuleEnabled(createDefaultSettings(), true);
+function armed(action: "sleep" | "shutdown" | "reboot"): Settings {
+  const settings = withRuleEnabled(withRuleAction(createDefaultSettings(), action), true);
   settings.rules[0] = { ...settings.rules[0]!, executionMode: "real" };
   return settings;
 }

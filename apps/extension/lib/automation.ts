@@ -1,3 +1,4 @@
+import { coalesceMessage, notificationBlockedMessage, scheduledMessage } from "./action-copy";
 import { HANDLED_DOWNLOAD_LIMIT, HISTORY_LIMIT } from "./constants";
 import { claimDownload } from "./dedup";
 import { planAutomations, type PlannedAction } from "./decision";
@@ -12,7 +13,7 @@ import {
   type ScheduleActionRequest,
 } from "./protocol";
 import { upsertExecution, type ExecutionRecord } from "./records";
-import { normalizeSettings, type Settings } from "./settings";
+import { normalizeSettings, type PowerAction, type Settings } from "./settings";
 
 export interface AutomationDeps {
   getDownload(id: number): Promise<DownloadItemSnapshot | null>;
@@ -27,11 +28,12 @@ export interface AutomationDeps {
   setPending(pending: PendingAction | null): Promise<void>;
   permissionGranted(): Promise<boolean>;
   notificationsGranted(): Promise<boolean>;
+  realActions(): Promise<readonly PowerAction[]>;
   hasLiveSession(): boolean;
   send(request: OneShotRequest): Promise<unknown>;
   schedule(request: ScheduleActionRequest): Promise<unknown>;
   cancel(request: CancelActionRequest): Promise<unknown>;
-  showSleepNotification(actionId: string): Promise<boolean>;
+  showNotification(action: PowerAction, actionId: string): Promise<boolean>;
   clearNotification(actionId: string): Promise<void>;
   now(): number;
   newRequestId(): string;
@@ -66,9 +68,12 @@ export async function processCompletedDownload(deps: AutomationDeps, downloadId:
     await deps.lock("download-automations:dispatch", async () => {
       const settings = normalizeSettings(await deps.getSettings());
       const pending = await deps.getPending();
+      const needsRealActions = settings.rules.some((rule) => rule.enabled && rule.executionMode === "real");
+      const realActions = needsRealActions ? await deps.realActions().catch(() => []) : [];
       const plans = planAutomations(settings, event, deps.newRequestId, deps.newActionId, {
         permissionGranted: await deps.permissionGranted(),
         notificationsGranted: await deps.notificationsGranted(),
+        realActions,
         hasLiveSession: deps.hasLiveSession(),
         pending,
       });
@@ -91,13 +96,13 @@ async function runPlan(deps: AutomationDeps, plan: PlannedAction, event: Downloa
       ruleId: plan.ruleId,
       downloadId: event.downloadId,
       filename: event.filename,
-      action: "sleep",
+      action: plan.action,
       createdAt: deps.now(),
       ok: true,
       executed: false,
       executionMode: "real",
       status: "coalesced",
-      message: "Sleep is already pending, so this download did not schedule another one.",
+      message: coalesceMessage(plan.action),
     };
   }
   if (plan.kind === "rejected") {
@@ -117,7 +122,7 @@ async function runPlan(deps: AutomationDeps, plan: PlannedAction, event: Downloa
       errorCode: plan.code,
     };
   }
-  return runRealSleep(deps, plan, event);
+  return runRealAction(deps, plan, event);
 }
 
 async function runDryRun(
@@ -166,9 +171,9 @@ async function runDryRun(
   }
 }
 
-async function runRealSleep(
+async function runRealAction(
   deps: AutomationDeps,
-  plan: Extract<PlannedAction, { kind: "real_sleep" }>,
+  plan: Extract<PlannedAction, { kind: "real_action" }>,
   event: DownloadCompletedEvent,
 ): Promise<ExecutionRecord> {
   const base = {
@@ -177,7 +182,7 @@ async function runRealSleep(
     ruleId: plan.ruleId,
     downloadId: event.downloadId,
     filename: event.filename,
-    action: "sleep" as const,
+    action: plan.action,
     createdAt: deps.now(),
     executed: false as const,
     executionMode: "real" as const,
@@ -207,26 +212,38 @@ async function runRealSleep(
       errorCode: parsed.ok ? "unexpected_result" : parsed.code,
     };
   }
+  if (parsed.status === "scheduled" && parsed.action !== plan.action) {
+    await cancelPending(deps, parsed.actionId);
+    return {
+      ...base,
+      ok: false,
+      status: "failed",
+      message: "The helper returned an unexpected result.",
+      errorCode: "unexpected_result",
+    };
+  }
   if (parsed.status === "coalesced") {
     return {
       ...base,
       id: deps.newRequestId(),
+      action: parsed.action,
       ok: true,
       status: "coalesced",
-      message: "Sleep is already pending, so this download did not schedule another one.",
+      message: coalesceMessage(parsed.action),
     };
   }
 
   const pending = createPendingAction({
     actionId: parsed.actionId,
     requestId: plan.request.requestId,
+    action: plan.action,
     downloadId: event.downloadId,
     filename: event.filename,
     scheduledAt: deps.now(),
     countdownSeconds: parsed.countdownSeconds,
   });
   await deps.setPending(pending);
-  const shown = await deps.showSleepNotification(pending.actionId);
+  const shown = await deps.showNotification(pending.action, pending.actionId);
   if (!shown) {
     await cancelPending(deps, pending.actionId);
     await deps.setPending({ ...pending, status: "cancelled" });
@@ -235,7 +252,7 @@ async function runRealSleep(
       ...base,
       ok: false,
       status: "cancelled",
-      message: "Sleep was cancelled because the notification could not be shown.",
+      message: notificationBlockedMessage(plan.action),
       errorCode: "notifications_unavailable",
     };
   }
@@ -244,7 +261,7 @@ async function runRealSleep(
     ...base,
     ok: true,
     status: "scheduled",
-    message: "This Mac will sleep in 30 seconds unless you cancel.",
+    message: scheduledMessage(plan.action),
   };
 }
 
@@ -252,7 +269,7 @@ async function cancelPending(deps: AutomationDeps, actionId: string): Promise<vo
   try {
     await deps.cancel(cancelActionRequest({ requestId: deps.newRequestId(), actionId }));
   } catch {
-    // The host discards a pending sleep when the connection closes. Do not retry it.
+    // The host discards a pending action when the connection closes. Do not retry it.
   }
 }
 

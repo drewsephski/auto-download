@@ -55,7 +55,7 @@ const scheduleActionRequestSchema = z.strictObject({
   requestId: requestIdSchema,
   type: z.literal("schedule_action"),
   actionId: requestIdSchema,
-  action: z.literal("sleep"),
+  action: powerActionSchema,
   executionMode: z.literal("real"),
   countdownSeconds: z.literal(COUNTDOWN_SECONDS),
   context: downloadContextSchema,
@@ -121,7 +121,7 @@ const capabilitiesSuccessSchema = z.strictObject({
   result: z.strictObject({
     platform: z.string().min(1).max(32),
     dryRunActions: z.array(powerActionSchema).length(3),
-    realActions: z.array(z.literal("sleep")).max(1),
+    realActions: z.array(powerActionSchema).max(3),
     countdown: z.strictObject({
       required: z.literal(true),
       minimumSeconds: z.number().int().min(1).max(120),
@@ -157,7 +157,7 @@ const scheduleSuccessSchema = z.strictObject({
   result: z.strictObject({
     status: z.enum(["scheduled", "coalesced"]),
     actionId: requestIdSchema,
-    action: z.literal("sleep"),
+    action: powerActionSchema,
     executionMode: z.literal("real"),
     countdownSeconds: z.number().int().min(10).max(120),
   }),
@@ -170,7 +170,7 @@ const cancelSuccessSchema = z.strictObject({
   result: z.strictObject({
     status: z.literal("cancelled"),
     actionId: requestIdSchema,
-    action: z.literal("sleep"),
+    action: powerActionSchema,
     executionMode: z.literal("real"),
     countdownSeconds: z.number().int().min(10).max(120),
   }),
@@ -184,7 +184,7 @@ const lifecycleSuccessSchema = z.strictObject({
     .strictObject({
       status: z.enum(["executing", "executed", "failed"]),
       actionId: requestIdSchema,
-      action: z.literal("sleep"),
+      action: powerActionSchema,
       executionMode: z.literal("real"),
       countdownSeconds: z.number().int().min(10).max(120),
       executed: z.boolean(),
@@ -202,7 +202,7 @@ const SAFE_ERROR_MESSAGES: Record<string, string> = {
   real_action_not_enabled: "The helper refused real execution for that action.",
   invalid_countdown: "The helper refused the countdown.",
   invalid_action_id: "The helper refused the pending action.",
-  unknown_action_id: "The helper had no matching pending sleep.",
+  unknown_action_id: "The helper had no matching pending action.",
   permission_denied: "macOS did not allow System Events control.",
   permission_unavailable: "System Events permission cannot be requested on this system.",
   malformed_request: "The helper could not read the request.",
@@ -221,7 +221,7 @@ export type HostResponseKind =
 
 export type HostResponseParse =
   | { ok: true; type: "ping" }
-  | { ok: true; type: "get_capabilities"; actions: PowerAction[]; realSleepSupported: boolean }
+  | { ok: true; type: "get_capabilities"; actions: PowerAction[]; realActions: PowerAction[] }
   | { ok: true; type: "request_permission"; permission: "granted" }
   | { ok: true; type: "execute_action"; action: PowerAction; message: string }
   | {
@@ -229,6 +229,7 @@ export type HostResponseParse =
       type: "schedule_action";
       status: "scheduled" | "coalesced";
       actionId: string;
+      action: PowerAction;
       countdownSeconds: number;
     }
   | { ok: true; type: "cancel_action"; actionId: string }
@@ -288,6 +289,7 @@ export function executeActionRequest(input: {
 export function scheduleActionRequest(input: {
   requestId: string;
   actionId: string;
+  action: PowerAction;
   downloadId: number;
   filename: string;
 }): ScheduleActionRequest {
@@ -296,7 +298,7 @@ export function scheduleActionRequest(input: {
     requestId: input.requestId,
     type: "schedule_action",
     actionId: input.actionId,
-    action: "sleep",
+    action: input.action,
     executionMode: "real",
     countdownSeconds: COUNTDOWN_SECONDS,
     context: {
@@ -357,12 +359,8 @@ export function parseHostResponse(requestId: string, expected: HostResponseKind,
     if (!hasEveryDryRunAction(actions)) {
       return rejected("unexpected_result", "The helper did not confirm dry-run actions.");
     }
-    const realSleepSupported =
-      parsed.data.result.platform === "macos" &&
-      parsed.data.result.realActions.length === 1 &&
-      parsed.data.result.realActions[0] === "sleep" &&
-      parsed.data.result.countdown.minimumSeconds <= COUNTDOWN_SECONDS;
-    return { ok: true, type: "get_capabilities", actions, realSleepSupported };
+    const realActions = supportedRealActions(parsed.data.result);
+    return { ok: true, type: "get_capabilities", actions, realActions };
   }
 
   if (expected === "request_permission") {
@@ -395,6 +393,7 @@ export function parseHostResponse(requestId: string, expected: HostResponseKind,
       type: "schedule_action",
       status: parsed.data.result.status,
       actionId: parsed.data.result.actionId,
+      action: parsed.data.result.action,
       countdownSeconds: parsed.data.result.countdownSeconds,
     };
   }
@@ -446,4 +445,15 @@ function rejected(code: string, message: string): HostResponseParse {
 
 function hasEveryDryRunAction(actions: PowerAction[]): boolean {
   return actions.includes("sleep") && actions.includes("shutdown") && actions.includes("reboot");
+}
+
+function supportedRealActions(result: {
+  platform: string;
+  realActions: PowerAction[];
+  countdown: { minimumSeconds: number };
+}): PowerAction[] {
+  if (result.platform !== "macos" || result.countdown.minimumSeconds > COUNTDOWN_SECONDS) {
+    return [];
+  }
+  return [...new Set(result.realActions)];
 }

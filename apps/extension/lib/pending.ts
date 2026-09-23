@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { filenameSchema } from "./protocol";
+import { powerActionSchema, type PowerAction } from "./settings";
 
 export const pendingStatusSchema = z.enum([
   "scheduled",
@@ -15,7 +16,7 @@ export type PendingStatus = z.infer<typeof pendingStatusSchema>;
 export const pendingActionSchema = z.strictObject({
   actionId: z.string().regex(/^[A-Za-z0-9_-]{1,80}$/),
   requestId: z.string().regex(/^[A-Za-z0-9_-]{1,80}$/),
-  action: z.literal("sleep"),
+  action: powerActionSchema,
   downloadId: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   filename: filenameSchema,
   scheduledAt: z.number().int().nonnegative(),
@@ -68,6 +69,7 @@ export function applyTerminalStatus(pending: PendingAction, status: PendingStatu
 export function createPendingAction(input: {
   actionId: string;
   requestId: string;
+  action: PowerAction;
   downloadId: number;
   filename: string;
   scheduledAt: number;
@@ -76,7 +78,7 @@ export function createPendingAction(input: {
   return pendingActionSchema.parse({
     actionId: input.actionId,
     requestId: input.requestId,
-    action: "sleep",
+    action: input.action,
     downloadId: input.downloadId,
     filename: input.filename,
     scheduledAt: input.scheduledAt,
